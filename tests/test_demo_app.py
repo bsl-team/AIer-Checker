@@ -29,14 +29,17 @@ def app(have_display, tmp_path):
 
 
 def test_window_builds_and_autoruns_extract(app):
-    assert "indent" in app.out_profile.get("1.0", "end")
-    assert "提取" in app.status.cget("text")
+    body = app.out_profile.get("1.0", "end")
+    assert "indent.size" in body          # rule keys are the same in either language
+    assert "置信度" in body                # the demo defaults to Chinese messages
     assert app.listbox.size() == 1
 
 
 def test_check_and_format_tabs_fill(app):
+    app.session.add_files([sample_path("mixed.cpp")])
+    app._reload_list()
     app.run_check()
-    assert "consistency" in app.out_check.get("1.0", "end") or "一致性" in app.status.cget("text")
+    assert "indent.type" in app.out_check.get("1.0", "end")
     app.run_format()
     text = app.out_format.get("1.0", "end")
     assert "应用规则" in text or "已符合档案" in text
@@ -71,6 +74,20 @@ def test_save_and_reload_user_profile(app):
     app.user_box.set("demo-user")
     app.run_load()
     assert "档案库" in app.out_profile.get("1.0", "end")
+
+
+def test_language_toggle_re_renders(app):
+    app.session.add_files([sample_path("mixed.cpp")])
+    app._reload_list()
+    app.run_extract()
+    app.run_check()
+    assert "样本内混用" in app.out_check.get("1.0", "end")
+    app.locale_var.set("en")
+    app.switch_locale()
+    profile = app.out_profile.get("1.0", "end")
+    check = app.out_check.get("1.0", "end")
+    assert "confidence" in profile and "置信度" not in profile
+    assert "mixed in file" in check
 
 
 def test_clear_resets_everything(app):

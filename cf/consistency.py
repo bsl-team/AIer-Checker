@@ -5,7 +5,8 @@ from dataclasses import dataclass, field
 
 from .document import Document
 from .extract import extract, extract_all
-from .profile import FEATURE_SPECS, Profile
+from .i18n import rule_label, t, translate_value
+from .profile import Profile
 
 
 def _weighted_mean(values: list[float], weights: list[float]) -> float:
@@ -152,14 +153,14 @@ def severity_for(rule: str, agreement: float, kind: str) -> str:
 
 
 def describe(rule: str, expected: str, actual: str, count: int, kind: str) -> str:
-    label = FEATURE_SPECS.get(rule, (None, rule))[1]
-    if rule == "indent.size" and actual.startswith("irregular:"):
-        return f"indent is not a multiple of the {expected}-character unit ({actual.split(':')[-1]} characters here)"
-    if rule == "width.limit" and actual.startswith(">"):
-        return f"row is longer than the {expected} column limit"
+    label = rule_label(rule)
+    if rule == "indent.size" and str(actual).startswith("irregular:"):
+        return t("d.indent_irregular", unit=expected, actual=str(actual).split(":")[-1])
+    if rule == "width.limit" and str(actual).startswith(">"):
+        return t("d.width_over", limit=expected)
     if kind == "against-profile":
-        return f"{label}: this file uses {actual}, the profile says {expected}"
-    return f"{label} varies: mostly {expected}, {count} row(s) use {actual}"
+        return t("d.against_profile", label=label, actual=translate_value(actual), expected=translate_value(expected))
+    return t("d.intra_file", label=label, expected=translate_value(expected), count=count, actual=translate_value(actual))
 
 
 def analyze(
@@ -310,7 +311,7 @@ def _rule_table(shared: Profile, per_file: dict[str, Profile], findings: list[Fi
         rows.append(
             {
                 "rule": key,
-                "label": FEATURE_SPECS.get(key, (None, key))[1],
+                "label": rule_label(key),
                 "value": base.value,
                 "confidence": base.confidence,
                 "agreement": round(agreeing / total, 3) if total else 0.0,

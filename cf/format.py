@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 
 from .document import Document, build_document, text_width
 from .extract import ASSIGN_OPS, BIN_OPS, CONTROL_PAREN_KW, colon_context, is_clike_definition, is_pointer_op
+from .i18n import t
 from .profile import Profile
 from .tokens import CHR, CMT, ID, KW, NUM, PRE, PUNCT, STR, Token
 
@@ -210,7 +211,7 @@ class Formatter:
                 changed=False,
                 applied=sorted(self.changed_rules),
                 skipped=sorted(self.skipped),
-                error=f"refused: the formatted text no longer lexes cleanly ({again.parse_error})",
+                error=t("f.no_lex", error=again.parse_error),
             )
         after = _normalise(again.token_stream())
         if before != after:
@@ -1169,7 +1170,7 @@ def _string_value(text: str) -> str:
 def _describe_divergence(before, after) -> str:
     for i, (a, b) in enumerate(zip(before, after)):
         if a != b:
-            return f"refused: token #{i} would change from {a[1][:40]!r} to {b[1][:40]!r}"
+            return t("f.token_changed", index=i, before=repr(a[1][:40]), after=repr(b[1][:40]))
     if len(before) != len(after):
-        return f"refused: token count changed from {len(before)} to {len(after)}"
-    return "refused: token stream changed"
+        return t("f.token_count", before=len(before), after=len(after))
+    return t("f.changed")

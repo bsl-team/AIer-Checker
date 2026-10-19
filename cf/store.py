@@ -8,6 +8,7 @@ import time
 from dataclasses import dataclass
 
 from .document import Document
+from .i18n import t
 from .extract import extract, extract_all
 from .profile import Profile
 
@@ -60,15 +61,15 @@ class ProfileStore:
             with open(self.path, encoding="utf-8") as fh:
                 raw = json.load(fh)
         except json.JSONDecodeError as exc:
-            raise StoreError(f"profile store {self.path} is not valid JSON: {exc}") from exc
+            raise StoreError(t("e.store_json", path=self.path, error=exc)) from exc
         except OSError as exc:
-            raise StoreError(f"cannot read profile store {self.path}: {exc}") from exc
+            raise StoreError(t("e.store_read", path=self.path, error=exc)) from exc
         users = {}
         for name, data in (raw.get("users") or {}).items():
             try:
                 users[name] = Profile.from_dict(data)
             except Exception as exc:
-                raise StoreError(f"profile {name!r} in {self.path} is damaged: {exc}") from exc
+                raise StoreError(t("e.store_damaged", name=repr(name), path=self.path, error=exc)) from exc
         self._users = users
         return users
 
@@ -92,7 +93,7 @@ class ProfileStore:
                 os.unlink(tmp)
             except OSError:
                 pass
-            raise StoreError(f"cannot write profile store {self.path}: {exc}") from exc
+            raise StoreError(t("e.store_write", path=self.path, error=exc)) from exc
 
     # -- users ------------------------------------------------------------
     def users(self) -> list[str]:
@@ -121,12 +122,12 @@ class ProfileStore:
     def require(self, user: str) -> Profile:
         prof = self.get(user)
         if prof is None:
-            raise StoreError(f"no style profile stored for user {user!r} (in {self.path})")
+            raise StoreError(t("e.no_profile", name=repr(user), path=self.path))
         return prof
 
     def put(self, profile: Profile) -> Profile:
         if not profile.user or not profile.user.strip():
-            raise StoreError("profile needs a non-empty user name")
+            raise StoreError(t("e.user_required"))
         profile.user = profile.user.strip()
         self._read()
         existing = self._users.get(profile.user)
@@ -157,7 +158,7 @@ class ProfileStore:
     def rename(self, old: str, new: str) -> Profile:
         prof = self.require(old)
         if not new.strip() or new in self._read():
-            raise StoreError(f"cannot rename {old!r} to {new!r}: name taken or empty")
+            raise StoreError(t("e.rename_taken", old=repr(old), new=repr(new)))
         del self._users[old]
         prof.user = new.strip()
         self.put(prof)
@@ -171,11 +172,11 @@ class ProfileStore:
         try:
             data = json.loads(text)
         except json.JSONDecodeError as exc:
-            raise StoreError(f"profile text is not valid JSON: {exc}") from exc
+            raise StoreError(t("e.import_json", error=exc)) from exc
         if "users" in data:  # a whole store file
             names = list(data["users"])
             if not names:
-                raise StoreError("profile file contains no users")
+                raise StoreError(t("e.import_no_users"))
             chosen = user if user in data["users"] else names[0]
             prof = Profile.from_dict(data["users"][chosen])
         else:

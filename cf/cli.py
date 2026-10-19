@@ -1,4 +1,8 @@
-"""Command line entry point: extract, check, profile, format."""
+"""Command line entry point: extract, check, profile, format.
+
+Messages, reports and ``--help`` come out in English or Chinese: ``-L zh`` /
+``--msg-lang zh`` (accepted anywhere on the command line) or ``CF_LANG=zh``.
+"""
 from __future__ import annotations
 
 import argparse
@@ -13,6 +17,7 @@ from .consistency import analyze
 from .document import build_document
 from .extract import extract_all
 from .format import FormatOptions, Formatter
+from .i18n import ENV_VAR, get_locale, set_locale, t
 from .profile import FEATURE_SPECS, Profile
 from .report import (
     render_consistency,
@@ -31,6 +36,7 @@ EXIT_FINDINGS = 1
 EXIT_ERROR = 2
 ENCODINGS = ("utf-8", "gbk", "cp936", "big5", "cp1252", "latin-1")
 SEVERITY_RANK = {"none": -1, "low": 0, "medium": 1, "high": 2}
+DEFAULT_STORE = os.path.join("~", ".code-feature", "profiles.json")
 
 
 class InputError(Exception):
@@ -60,7 +66,7 @@ def read_source(path: str) -> tuple[str, str]:
         with open(path, "rb") as fh:
             raw = fh.read()
     except OSError as exc:
-        raise InputError(f"cannot read {path}: {exc.strerror or exc}") from exc
+        raise InputError(t("e.read_file", path=path, error=exc.strerror or exc)) from exc
     return decode_bytes(raw)
 
 
@@ -69,7 +75,7 @@ def write_source(path: str, text: str, encoding: str) -> None:
         with open(path, "wb") as fh:
             fh.write(text.encode(encoding, errors="replace"))
     except OSError as exc:
-        raise InputError(f"cannot write {path}: {exc.strerror or exc}") from exc
+        raise InputError(t("e.write_file", path=path, error=exc.strerror or exc)) from exc
 
 
 def expand_paths(paths: list[str]) -> list[str]:
@@ -82,7 +88,7 @@ def expand_paths(paths: list[str]) -> list[str]:
         if any(ch in pattern for ch in "*?["):
             matches = sorted(glob.glob(pattern, recursive=True))
             if not matches:
-                raise InputError(f"no files match {pattern!r}")
+                raise InputError(t("e.no_glob_match", pattern=repr(pattern)))
             out.extend(matches)
         else:
             out.append(pattern)
@@ -94,7 +100,7 @@ def load_inputs(paths: list[str], lang: str | None = None) -> tuple[list, list[t
     spec = None
     if lang:
         if lang not in SPEC_BY_NAME:
-            raise InputError(f"unknown language {lang!r}; try --lang with one of {', '.join(sorted(SPEC_BY_NAME))}")
+            raise InputError(t("e.unknown_lang", name=repr(lang), options=", ".join(sorted(SPEC_BY_NAME))))
         spec = SPEC_BY_NAME[lang]
     paths = expand_paths(list(paths or []))
     if not paths or paths == ["-"]:
@@ -113,7 +119,7 @@ def profile_from_args(args, store: ProfileStore) -> Profile:
     user = getattr(args, "user", None)
     path = getattr(args, "profile", None)
     if user and path:
-        raise InputError("use either --user or --profile, not both")
+        raise InputError(t("e.both_sources"))
     if user:
         return store.require(user)
     if path:
@@ -121,16 +127,16 @@ def profile_from_args(args, store: ProfileStore) -> Profile:
             text, _enc = read_source(path)
             data = json.loads(text)
         except OSError as exc:
-            raise InputError(f"cannot read profile {path}: {exc.strerror or exc}") from exc
+            raise InputError(t("e.bad_profile_path", path=path, error=exc.strerror or exc)) from exc
         except json.JSONDecodeError as exc:
-            raise InputError(f"profile {path} is not valid JSON: {exc}") from exc
+            raise InputError(t("e.bad_profile_json", path=path, error=exc)) from exc
         if "users" in data:
             names = list(data["users"])
             if not names:
-                raise InputError(f"profile file {path} contains no users")
+                raise InputError(t("e.profile_empty_file", path=path))
             return Profile.from_dict(data["users"][names[0]])
         return Profile.from_dict(data)
-    raise InputError("a style profile is required: pass --user NAME or --profile FILE")
+    raise InputError(t("e.need_profile"))
 
 
 def options_from_args(args) -> FormatOptions:
@@ -139,7 +145,7 @@ def options_from_args(args) -> FormatOptions:
         rules = {r.strip() for r in args.rules.split(",") if r.strip()}
         unknown = sorted(rules - set(FEATURE_SPECS))
         if unknown:
-            raise InputError(f"unknown rule(s): {', '.join(unknown)} (see 'cf rules')")
+            raise InputError(t("e.unknown_rules", rules=", ".join(unknown)))
     return FormatOptions(
         rules=rules,
         min_confidence=args.min_confidence,
@@ -167,7 +173,8 @@ def cmd_extract(args) -> int:
     else:
         print(render_profile(profile, min_confidence=args.min_confidence, show_rows=args.show_rows))
         if args.user:
-            print(f"\nsaved profile for {profile.user} in {store.path}")
+            print()
+            print(t("c.saved", user=profile.user, path=store.path))
     return EXIT_OK
 
 
@@ -183,7 +190,7 @@ def cmd_check(args) -> int:
         if args.show_rules:
             rows = rule_summary(report)
             if rows:
-                print("per-rule agreement:")
+                print(t("r.rule_agreement"))
                 print("\n".join(f"  {line}" for line in rows))
     threshold = SEVERITY_RANK.get(args.fail_on, 2)
     worst = max((SEVERITY_RANK.get(f.severity, 0) for f in report.findings), default=-1)
@@ -201,7 +208,7 @@ def cmd_profile(args) -> int:
         return EXIT_OK
     if action in ("add", "update"):
         if not args.files:
-            raise InputError(f"'profile {action}' needs source files to learn from")
+            raise InputError(t("e.need_samples", action=f"profile {action}"))
         docs, _meta = load_inputs(args.files, args.lang)
         replace = action == "add" and args.replace
         profile = store.add_from_samples(args.name, docs, replace=replace)
@@ -209,9 +216,9 @@ def cmd_profile(args) -> int:
         if args.json:
             print(json.dumps(profile.to_dict(), indent=2, ensure_ascii=False))
         else:
-            verb = "created" if replace or action == "add" else "updated"
-            print(f"{verb} profile '{profile.user}' from {len(docs)} sample(s), language {profile.language}")
-            print(f"store: {store.path}")
+            key = "c.created" if replace or action == "add" else "c.updated"
+            print(t(key, user=profile.user, count=len(docs), language=profile.language))
+            print(t("r.store_path", path=store.path))
             print(render_profile(profile, min_confidence=args.min_confidence))
         return EXIT_OK
     if action == "show":
@@ -223,20 +230,20 @@ def cmd_profile(args) -> int:
         return EXIT_OK
     if action == "delete":
         if not store.remove(args.name):
-            raise InputError(f"no profile named {args.name!r}")
+            raise InputError(t("e.no_such_profile", name=repr(args.name)))
         store.flush()
-        print(f"deleted profile '{args.name}'")
+        print(t("c.deleted", user=args.name))
         return EXIT_OK
     if action == "rename":
         profile = store.rename(args.name, args.new_name)
         store.flush()
-        print(f"renamed '{args.name}' to '{profile.user}'")
+        print(t("c.renamed", old=args.name, new=profile.user))
         return EXIT_OK
     if action == "export":
         text = store.export(args.name)
         if args.out:
             write_source(args.out, text, "utf-8")
-            print(f"wrote {args.name} to {args.out}")
+            print(t("c.exported", user=args.name, path=args.out))
         else:
             print(text, end="")
         return EXIT_OK
@@ -244,9 +251,9 @@ def cmd_profile(args) -> int:
         text, _enc = read_source(args.file)
         profile = store.import_json(text, user=args.name, replace=args.replace)
         store.flush()
-        print(f"imported profile '{profile.user}' ({len(profile.samples)} sample(s)) into {store.path}")
+        print(t("c.imported", user=profile.user, count=len(profile.samples), path=store.path))
         return EXIT_OK
-    raise InputError(f"unknown profile action {action!r}")
+    raise InputError(t("e.unknown_action", action=repr(action)))
 
 
 def cmd_format(args) -> int:
@@ -271,6 +278,7 @@ def cmd_format(args) -> int:
     if args.json:
         payload = {
             "profile": profile.user,
+            "locale": get_locale(),
             "mode": "write" if args.write else "check" if args.check else "preview",
             "files": [
                 {
@@ -287,7 +295,7 @@ def cmd_format(args) -> int:
     elif not from_stdin:
         print(render_format([(p, r, before) for p, r, _enc, before in results], diffs=args.diff))
     if refused:
-        print(f"could not format {len(refused)} file(s) safely: {', '.join(refused)}", file=sys.stderr)
+        print(t("e.refused_files", count=len(refused), names=", ".join(refused)), file=sys.stderr)
         return EXIT_ERROR
     changed_any = any(res.changed for _p, res, _e, _b in results)
     if args.check and changed_any:
@@ -307,110 +315,145 @@ def cmd_languages(args) -> int:
 
 # -- parser -----------------------------------------------------------------
 
+EPILOG = {
+    "en": (
+        "examples:\n"
+        "  cf profile add bin --lang cpp src/*.cpp          learn a profile from samples\n"
+        "  cf extract src/*.py                              show what the samples imply\n"
+        "  cf check src/*.cpp --user bin --fail-on medium   audit against a stored profile\n"
+        "  cf format --user bin --check src/*.cpp           CI gate: would anything move?\n"
+        "  cf format --user bin --write src/*.cpp           reformat in place\n"
+        "  cf format --profile bin.json < main.c            read stdin, write stdout\n"
+        "  cf -L zh check src/*.py                          report in Chinese\n"
+    ),
+    "zh": (
+        "示例：\n"
+        "  cf profile add bin --lang cpp src/*.cpp          从样本学习一份个人风格档案\n"
+        "  cf extract src/*.py                              查看样本体现出的风格\n"
+        "  cf check src/*.cpp --user bin --fail-on medium   对照已存档案做一致性检查\n"
+        "  cf format --user bin --check src/*.cpp           CI 门禁：会不会有改动\n"
+        "  cf format --user bin --write src/*.cpp           就地格式化\n"
+        "  cf format --profile bin.json < main.c            标准输入进、标准输出出\n"
+        "  cf -L zh check src/*.py                          用中文输出提示\n"
+    ),
+}
+
 
 def add_common(parser: argparse.ArgumentParser, files_help: str) -> None:
     parser.add_argument("files", nargs="*", help=files_help)
-    parser.add_argument("--lang", help="force the language instead of detecting it")
-    parser.add_argument("--store", help=f"profile store file (default {os.path.join('~', '.code-feature', 'profiles.json')}, env CF_STORE)")
-    parser.add_argument("--json", action="store_true", help="machine readable output")
+    parser.add_argument("--lang", help=t("h.lang"))
+    parser.add_argument("--store", help=t("h.store", default=DEFAULT_STORE))
+    parser.add_argument("--json", action="store_true", help=t("h.json"))
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="cf",
-        description="Code style kernel: extract a developer's style, audit consistency, store profiles, reformat.",
+        description=t("h.summary"),
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=(
-            "examples:\n"
-            "  cf profile add bin --lang cpp src/*.cpp              learn a profile from samples\n"
-            "  cf extract src/*.py                                  show what the samples imply\n"
-            "  cf check src/*.cpp --user bin --fail-on medium        audit against a stored profile\n"
-            "  cf format --user bin --check src/*.cpp                CI gate: would anything move?\n"
-            "  cf format --user bin --write src/*.cpp               reformat in place\n"
-            "  cf format --profile bin.json < main.c                 read stdin, write stdout\n"
-        ),
+        epilog=EPILOG[get_locale()],
     )
     parser.add_argument("--version", action="version", version=f"cf {__version__}")
+    parser.add_argument("-L", "--msg-lang", choices=("en", "zh"), default=None, help=t("h.msg_lang"))
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p = sub.add_parser("extract", help="extract a style profile from code samples")
-    add_common(p, "source files (default: stdin)")
-    p.add_argument("--user", help="also save the profile under this user")
-    p.add_argument("--replace", action="store_true", help="replace the user's stored profile")
-    p.add_argument("--out", help="write the profile JSON to this file")
-    p.add_argument("--min-confidence", type=float, default=0.0, help="hide weakly evidenced rules")
-    p.add_argument("--show-rows", action="store_true", help="list the rows where a rule deviates")
+    p = sub.add_parser("extract", help=t("h.lh.extract"))
+    add_common(p, t("h.files"))
+    p.add_argument("--user", help=t("h.user_extract"))
+    p.add_argument("--replace", action="store_true", help=t("h.replace"))
+    p.add_argument("--out", help=t("h.out"))
+    p.add_argument("--min-confidence", type=float, default=0.0, help=t("h.min_conf"))
+    p.add_argument("--show-rows", action="store_true", help=t("h.show_rows"))
     p.set_defaults(func=cmd_extract)
 
-    p = sub.add_parser("check", help="find style inconsistencies inside and across samples")
-    add_common(p, "source files (default: stdin)")
-    p.add_argument("--user", help="audit against a stored profile instead of the samples' own")
-    p.add_argument("--profile", help="audit against a profile JSON file")
-    p.add_argument("--min-evidence", type=int, default=3, help="ignore rules seen fewer than N times")
-    p.add_argument("--max-findings", type=int, default=40, help="cap printed findings (0 = no cap)")
-    p.add_argument("--all", action="store_true", help="print every finding")
-    p.add_argument("--show-rules", action="store_true", help="also print per-rule agreement")
-    p.add_argument("--fail-on", choices=("none", "low", "medium", "high"), default="high",
-                   help="exit 1 when a finding of at least this severity exists")
+    p = sub.add_parser("check", help=t("h.lh.check"))
+    add_common(p, t("h.files"))
+    p.add_argument("--user", help=t("h.check_user"))
+    p.add_argument("--profile", help=t("h.check_profile"))
+    p.add_argument("--min-evidence", type=int, default=3, help=t("h.min_evidence"))
+    p.add_argument("--max-findings", type=int, default=40, help=t("h.max_findings"))
+    p.add_argument("--all", action="store_true", help=t("h.all"))
+    p.add_argument("--show-rules", action="store_true", help=t("h.show_rules"))
+    p.add_argument("--fail-on", choices=("none", "low", "medium", "high"), default="high", help=t("h.fail_on"))
     p.set_defaults(func=cmd_check)
 
-    p = sub.add_parser("profile", help="manage stored style profiles")
+    p = sub.add_parser("profile", help=t("h.lh.profile"))
     subp = p.add_subparsers(dest="action", required=True)
 
     def profile_flags(sp):
-        sp.add_argument("--store", help="profile store file")
-        sp.add_argument("--json", action="store_true", help="machine readable output")
-        sp.add_argument("--min-confidence", type=float, default=0.0)
-        sp.add_argument("--show-rows", action="store_true")
+        sp.add_argument("--store", help=t("h.store", default=DEFAULT_STORE))
+        sp.add_argument("--json", action="store_true", help=t("h.json"))
+        sp.add_argument("--min-confidence", type=float, default=0.0, help=t("h.min_conf"))
+        sp.add_argument("--show-rows", action="store_true", help=t("h.show_rows"))
         return sp
 
-    a = profile_flags(subp.add_parser("add", help="create a user's profile from samples"))
-    a.add_argument("name")
-    a.add_argument("files", nargs="*")
-    a.add_argument("--lang")
-    a.add_argument("--replace", action="store_true", help="start over instead of merging")
-    s = profile_flags(subp.add_parser("show", help="print a stored profile"))
-    s.add_argument("name")
-    u = profile_flags(subp.add_parser("update", help="merge more samples into a stored profile"))
-    u.add_argument("name")
-    u.add_argument("files", nargs="*")
-    u.add_argument("--lang")
-    profile_flags(subp.add_parser("list", help="list stored profiles"))
-    d = profile_flags(subp.add_parser("delete", help="remove a profile"))
-    d.add_argument("name")
-    r = profile_flags(subp.add_parser("rename", help="rename a profile"))
-    r.add_argument("name")
-    r.add_argument("new_name")
-    e = profile_flags(subp.add_parser("export", help="print (or write) a profile as JSON"))
-    e.add_argument("name")
-    e.add_argument("--out")
-    i = profile_flags(subp.add_parser("import", help="load a profile JSON into the store"))
-    i.add_argument("file")
-    i.add_argument("name", nargs="?")
-    i.add_argument("--replace", action="store_true")
+    a = profile_flags(subp.add_parser("add", help=t("h.lh.add")))
+    a.add_argument("name", help=t("h.name"))
+    a.add_argument("files", nargs="*", help=t("h.files.profile"))
+    a.add_argument("--lang", help=t("h.lang"))
+    a.add_argument("--replace", action="store_true", help=t("h.replace"))
+    s = profile_flags(subp.add_parser("show", help=t("h.lh.show")))
+    s.add_argument("name", help=t("h.name"))
+    u = profile_flags(subp.add_parser("update", help=t("h.lh.update")))
+    u.add_argument("name", help=t("h.name"))
+    u.add_argument("files", nargs="*", help=t("h.files.profile"))
+    u.add_argument("--lang", help=t("h.lang"))
+    profile_flags(subp.add_parser("list", help=t("h.lh.list")))
+    d = profile_flags(subp.add_parser("delete", help=t("h.lh.delete")))
+    d.add_argument("name", help=t("h.name"))
+    r = profile_flags(subp.add_parser("rename", help=t("h.lh.rename")))
+    r.add_argument("name", help=t("h.name"))
+    r.add_argument("new_name", help=t("h.new_name"))
+    e = profile_flags(subp.add_parser("export", help=t("h.lh.export")))
+    e.add_argument("name", help=t("h.name"))
+    e.add_argument("--out", help=t("h.out"))
+    i = profile_flags(subp.add_parser("import", help=t("h.lh.import")))
+    i.add_argument("file", help=t("h.profile_file"))
+    i.add_argument("name", nargs="?", help=t("h.name"))
+    i.add_argument("--replace", action="store_true", help=t("h.replace"))
     p.set_defaults(func=cmd_profile)
 
-    p = sub.add_parser("format", help="reformat code to match a style profile")
-    add_common(p, "source files (default: stdin)")
+    p = sub.add_parser("format", help=t("h.lh.format"))
+    add_common(p, t("h.files"))
     target = p.add_mutually_exclusive_group()
-    target.add_argument("--user", help="use this stored profile")
-    target.add_argument("--profile", help="use a profile JSON file")
+    target.add_argument("--user", help=t("h.format_user"))
+    target.add_argument("--profile", help=t("h.format_profile"))
     mode = p.add_mutually_exclusive_group()
-    mode.add_argument("--write", "-i", action="store_true", help="rewrite files in place")
-    mode.add_argument("--check", action="store_true", help="exit 1 if anything would change")
-    p.add_argument("--diff", action="store_true", help="show a unified diff for each change")
-    p.add_argument("--rules", help="comma separated rule keys to apply (see 'cf rules')")
-    p.add_argument("--min-confidence", type=float, default=0.5, help="skip observed rules below this confidence")
-    p.add_argument("--observed-only", action="store_true", help="never fall back to family defaults")
-    p.add_argument("--no-wrap", action="store_true", help="do not split rows longer than width.limit")
-    p.add_argument("--eol", choices=("keep", "lf", "crlf"), default="keep")
+    mode.add_argument("--write", "-i", action="store_true", help=t("h.write"))
+    mode.add_argument("--check", action="store_true", help=t("h.check"))
+    p.add_argument("--diff", action="store_true", help=t("h.diff"))
+    p.add_argument("--rules", help=t("h.rules"))
+    p.add_argument("--min-confidence", type=float, default=0.5, help=t("h.min_conf.format"))
+    p.add_argument("--observed-only", action="store_true", help=t("h.observed_only"))
+    p.add_argument("--no-wrap", action="store_true", help=t("h.no_wrap"))
+    p.add_argument("--eol", choices=("keep", "lf", "crlf"), default="keep", help=t("h.eol"))
     p.set_defaults(func=cmd_format)
 
-    p = sub.add_parser("rules", help="list the style rules the kernel understands")
+    p = sub.add_parser("rules", help=t("h.lh.rules"))
     p.set_defaults(func=cmd_rules)
-    p = sub.add_parser("languages", help="list supported languages")
+    p = sub.add_parser("languages", help=t("h.lh.languages"))
     p.set_defaults(func=cmd_languages)
     return parser
+
+
+def split_msg_lang(argv: list[str]) -> tuple[list[str], str | None]:
+    """Pull ``-L``/``--msg-lang`` out of argv so it can sit anywhere in the command line."""
+    rest: list[str] = []
+    value: str | None = None
+    i = 0
+    while i < len(argv):
+        token = argv[i]
+        if token in ("-L", "--msg-lang"):
+            value = argv[i + 1] if i + 1 < len(argv) else None
+            i += 2
+            continue
+        if token.startswith("--msg-lang="):
+            value = token.split("=", 1)[1]
+            i += 1
+            continue
+        rest.append(token)
+        i += 1
+    return rest, value
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -419,6 +462,9 @@ def main(argv: list[str] | None = None) -> int:
         sys.stderr.reconfigure(errors="replace")
     except (AttributeError, ValueError):
         pass
+    argv = list(sys.argv[1:] if argv is None else argv)
+    argv, flag = split_msg_lang(argv)
+    set_locale(flag or os.environ.get(ENV_VAR))
     parser = build_parser()
     args = parser.parse_args(argv)
     if getattr(args, "max_findings", None) == 0:
@@ -429,7 +475,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"cf: {exc}", file=sys.stderr)
         return EXIT_ERROR
     except KeyboardInterrupt:
-        print("interrupted", file=sys.stderr)
+        print(t("e.interrupted"), file=sys.stderr)
         return EXIT_ERROR
 
 

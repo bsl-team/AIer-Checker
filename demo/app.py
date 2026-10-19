@@ -9,8 +9,11 @@ from tkinter import filedialog, messagebox, ttk
 if __package__ in (None, ""):  # allow `python demo/app.py` as well as `python -m demo.app`
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from cf.i18n import ENV_VAR, get_locale, set_locale
 from cf.tokens import SPEC_BY_NAME
 from demo.service import DemoError, Session
+
+LOCALES = (("zh", "中文"), ("en", "English"))
 
 MONO = ("Consolas", 10)
 SAMPLE_START = '''// 粘在这里的样本可以直接提取风格
@@ -32,6 +35,7 @@ class App:
         root.title("代码风格内核 Demo")
         root.geometry("1120x720")
         root.minsize(900, 560)
+        set_locale(os.environ.get(ENV_VAR) or "zh")  # the window's own chrome is Chinese already
         self.pages: dict[str, ttk.Frame] = {}
         self.cmd = {
             "extract": self._guard(self.run_extract),
@@ -45,6 +49,7 @@ class App:
             "delete": self._guard(self.delete_sample),
             "clear": self._guard(self.clear_samples),
             "apply": self._guard(self.apply_editor),
+            "locale": self._guard(self.switch_locale),
         }
         self._build_top()
         self._build_body()
@@ -70,8 +75,12 @@ class App:
         self.lang_var = tk.StringVar(value="auto")
         langs = ["auto"] + sorted(SPEC_BY_NAME)
         ttk.Combobox(bar, textvariable=self.lang_var, values=langs, width=11, state="readonly").pack(side="left", padx=(6, 0))
-        self.store_label = ttk.Label(bar, text=f"档案库: {self.session.store.path}")
-        self.store_label.pack(side="right")
+        ttk.Label(bar, text="提示语").pack(side="left", padx=(10, 4))
+        self.locale_var = tk.StringVar(value=get_locale())
+        box = ttk.Combobox(bar, textvariable=self.locale_var, values=[code for code, _ in LOCALES], width=5, state="readonly")
+        box.pack(side="left")
+        box.bind("<<ComboboxSelected>>", lambda _e: self.cmd["locale"]())
+        ttk.Label(bar, text=f"档案库: {self.session.store.path}").pack(side="right")
 
     def _build_body(self) -> None:
         pane = ttk.Panedwindow(self.root, orient="horizontal")
@@ -249,6 +258,16 @@ class App:
         # Tk appends one implicit newline; "end-1c" would eat the file's own final newline
         text = raw[:-1] if raw.endswith("\n") else raw
         self.session.update_text(index, text)
+
+    def switch_locale(self) -> None:
+        set_locale(self.locale_var.get())
+        if not self.session.samples:
+            return
+        self.cmd["extract"]()
+        if self.session.report is not None:
+            self.cmd["check"]()
+        if self.session.entries:
+            self.cmd["format"]()
 
     def run_extract(self) -> None:
         self.session.language = self.lang_var.get()
