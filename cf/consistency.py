@@ -50,6 +50,19 @@ HIGH_SEVERITY_RULES = {
 
 SEVERITY_WEIGHT = {"high": 3.0, "medium": 1.5, "low": 0.6}
 
+# A single file can vary these on purpose: quotes depend on the string's content, continuation
+# style on what reads best, and member/variable names often come from someone else's API.
+# They stay reportable, but never as a defect the author must fix.
+CONTENT_DRIVEN = {
+    "quote.style",
+    "indent.continuation",
+    "layout.args_per_row",
+    "layout.trailing_comma",
+    "layout.wrap_operator",
+    "naming.member",
+    "naming.variable",
+}
+
 STRICT_SEVERITY = {
     "indent.type": "high",
     "indent.size": "high",
@@ -129,6 +142,8 @@ class ConsistencyReport:
 def severity_for(rule: str, agreement: float, kind: str) -> str:
     if kind == "intra-file" and rule in STRICT_ANY_DEVIATION:
         return STRICT_SEVERITY.get(rule, "medium")
+    if kind == "intra-file" and rule in CONTENT_DRIVEN:
+        return "low"
     if kind == "against-profile" and rule in HIGH_SEVERITY_RULES:
         return "high"
     if rule in HIGH_SEVERITY_RULES:

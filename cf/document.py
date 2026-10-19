@@ -14,6 +14,7 @@ class Line:
     tokens: list[Token] = field(default_factory=list)
     in_trivia: bool = False      # part of a multi-line comment/string body
     in_string: bool = False      # part of a multi-line string body (layout-blind)
+    continuation: bool = False   # row starts inside an open bracket group
     directive: bool = False       # preprocessor / decorator line kept verbatim
 
     @property
@@ -158,6 +159,7 @@ def build_document(src: str, path: str | None = None, spec: Spec | None = None) 
         if t.kind == PRE:
             rows[t.row - 1].directive = True
     depths, parens = _depth_scan(rows, spec)
+    _mark_continuations(rows, spec)
     return Document(
         path=path or "<stdin>",
         spec=spec,
@@ -170,6 +172,34 @@ def build_document(src: str, path: str | None = None, spec: Spec | None = None) 
         paren_depth=parens,
         parse_error=err,
     )
+
+
+def _mark_continuations(rows: list[Line], spec: Spec) -> None:
+    """Flag rows that begin inside an unclosed bracket.
+
+    In clike only ``(``/``[`` mean the row continues an expression; ``{`` opens a block whose
+    indentation is real.  In python a multi-line dict literal is a continuation, so ``{`` counts.
+    """
+    brace_is_group = spec.family == "python"
+    stack: list[str] = []
+    for row in rows:
+        if row.tokens:
+            if stack:
+                row.continuation = True
+            for t in row.tokens:
+                if t.kind not in (PUNCT,):
+                    continue
+                if t.text in ("(", "["):
+                    stack.append(t.text)
+                elif t.text in (")", "]"):
+                    if stack:
+                        stack.pop()
+                elif t.text == "{":
+                    if brace_is_group:
+                        stack.append("{")
+                elif t.text == "}":
+                    if brace_is_group and stack and stack[-1] == "{":
+                        stack.pop()
 
 
 def _lex(norm: str, spec: Spec) -> tuple[list[Token], str | None]:

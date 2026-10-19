@@ -166,6 +166,13 @@ def analyze_ast(src: str) -> PythonSemantics:
     return sem
 
 
+def _roots_at_self(node: ast.Attribute) -> bool:
+    obj = node.value
+    while isinstance(obj, ast.Attribute):
+        obj = obj.value
+    return isinstance(obj, ast.Name) and obj.id in ("self", "cls")
+
+
 class _Collector(ast.NodeVisitor):
     """Walks the tree keeping class/function scope depth so names land in the right role."""
 
@@ -282,7 +289,9 @@ class _Collector(ast.NodeVisitor):
         self.generic_visit(node)
 
     def visit_Attribute(self, node) -> None:
-        if not node.attr.startswith("__"):
+        # Only the author's own fields describe their naming habit; ``response.JsonData`` from a
+        # third-party API would otherwise be counted against them.
+        if not node.attr.startswith("__") and _roots_at_self(node):
             self.sem.attributes.append((node.lineno, node.attr))
         self.generic_visit(node)
 

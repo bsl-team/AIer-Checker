@@ -11,6 +11,7 @@ from .profile import Feature, Profile, Sample
 from .tokens import CHR, CMT, ID, KW, NUM, PUNCT, PRE, STR, Token
 
 VIS_TAB = 8  # visual width used for line-length statistics
+ALIGN_TOLERANCE = 3  # columns a hung row may drift by while still meaning "aligned"
 
 CONTROL_PAREN_KW = {"if", "for", "while", "switch", "catch", "synchronized", "match", "case", "unless", "elif", "with", "do"}
 BIN_OPS = {
@@ -84,8 +85,8 @@ class Extractor:
         for r in self.code_rows():
             if r.directive or not r.indent:
                 continue
-            if self.doc.paren_depth[r.num - 1]:
-                continue  # wrapped row: measured as continuation
+            if r.continuation or self.doc.paren_depth[r.num - 1]:
+                continue  # wrapped row: measured as continuation, not as a block indent
             ind = r.indent
             has_tab, has_space = "\t" in ind, " " in ind
             kind = "mixed" if (has_tab and has_space) else ("tab" if has_tab else "space")
@@ -108,8 +109,9 @@ class Extractor:
             if not r.tokens:
                 continue
             first = r.tokens[0]
-            if first.col == aligned_col or first.col == open_tok.col + 1:
-                self.rec("indent.continuation", "aligned", num)
+            # Hanging alignment and a fixed step coexist legally in every style guide, and the
+            # formatter keeps aligned rows: measuring them together would call both a conflict.
+            if abs(first.col - aligned_col) <= ALIGN_TOLERANCE or abs(first.col - (open_tok.col + 1)) <= ALIGN_TOLERANCE:
                 continue
             base = self._indent_measure(self.doc.row(opener_row))
             delta = self._indent_measure(r) - base
@@ -224,6 +226,8 @@ class Extractor:
                 if t.text == "**":
                     continue  # exponent / **kwargs / **pointer: spacing depends on the operands
                 if left and right and self._is_binary(toks, i):
+                    if t.text in ASSIGN_OPS and (parens > 0 or brackets > 0):
+                        continue  # f(timeout=30) and a[1:2]=x are not assignment-layout decisions
                     key = "space.around_assignment" if t.text in ASSIGN_OPS else "space.around_operators"
                     self.rec(key, t.gap > 0 and nx.gap > 0, t.row)
 

@@ -594,21 +594,25 @@ class Formatter:
         return False
 
     def _closer_indent(self, opener: "_Group", piece: Piece) -> str:
-        """A bracket closer that the author aligned under its opener stays there."""
-        if text_width(piece.original_indent, 8) == opener.aligned:
+        """A bracket closer the author aligned under its opener stays aligned."""
+        cur = text_width(piece.original_indent, 8)
+        if _prefer_aligned(cur, opener.aligned, opener.indent_width):
             return " " * opener.aligned
         return opener.indent_str
 
     def _continuation_or_keep(self, opener: "_Group", piece: Piece) -> str:
-        """A row the author already aligned under its bracket stays aligned.
+        """Give a wrapped row whichever style it was written in: hung alignment or a fixed step.
 
-        Files often mix a profiled continuation step with hand-aligned argument lists; forcing
-        every row to one style fights the author's per-call choices and never converges.
+        Re-spacing the opening row shifts the alignment target by a character or two.  Treating
+        that as "no longer aligned" would flip the row to a stepped indent and never settle, so
+        whichever candidate the row sits closer to wins, and an aligned row is repaired to the
+        exact column.
         """
         if not self.enabled("indent.continuation"):
             return piece.original_indent
         wanted = self._continuation_indent(opener)
-        if text_width(piece.original_indent, 8) == opener.aligned:
+        cur = text_width(piece.original_indent, 8)
+        if _prefer_aligned(cur, opener.aligned, text_width(wanted, 8)):
             return " " * opener.aligned
         return wanted
 
@@ -957,14 +961,16 @@ def _is_namespace_header(piece: Piece) -> bool:
 
 
 def _group_for(tok: Token, piece: Piece, idx: int) -> _Group:
-    """Record an opening bracket together with the column its elements hang at."""
-    indent_width = text_width(piece.indent, 8)
-    base = text_width(piece.original_indent, 8)
+    """Record an opening bracket together with the column its elements hang at.
+
+    The column is measured on the rendered row (after intra-row spacing), so a re-spaced opening
+    row moves the target with it and a second pass finds the rows already where they belong.
+    """
     nxt = piece.cells[idx + 1].tok if idx + 1 < len(piece.cells) else None
     if nxt is not None and nxt.row == tok.row:
-        aligned = indent_width + max(0, nxt.col - base)
+        aligned = _column_after(nxt, piece)
     else:
-        aligned = indent_width + _column_after(tok, piece) + 1
+        aligned = _column_after(tok, piece) + 1
     return _Group(tok, piece.indent, _column_after(tok, piece), aligned)
 
 
@@ -1003,13 +1009,19 @@ def _closes(group: "_Group", tok: Token) -> bool:
 
 
 def _column_after(tok: Token, piece: Piece) -> int:
-    """Rendered column of ``tok`` (0-based) inside the piece's body."""
+    """Rendered column of ``tok`` (0-based), counted the same way :meth:`Formatter._body` writes it."""
     width = text_width(piece.indent, 8)
-    for cell in piece.cells:
+    for idx, cell in enumerate(piece.cells):
         if cell.tok.index == tok.index:
             return width
-        width += (cell.pre if cell.pre is not None else max(0, cell.tok.gap)) + len(cell.tok.text)
+        pre = 0 if idx == 0 else (cell.pre if cell.pre is not None else max(0, cell.tok.gap))
+        width += pre + len(cell.tok.text)
     return width
+
+
+def _prefer_aligned(cur: int, aligned: int, stepped: int) -> bool:
+    """Does the row sit closer to the hung-alignment column than to the stepped indent?"""
+    return aligned == stepped or abs(cur - aligned) < abs(cur - stepped)
 
 
 def _is_pointer_op(cells: list[Cell], idx: int) -> bool:
