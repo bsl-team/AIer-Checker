@@ -12,9 +12,10 @@ dependencies = []
 
 [project.scripts]
 cf = "cf.cli:main"
+cf-demo = "demo.app:main"
 
 [tool.setuptools.packages.find]
-include = ["cf*"]
+include = ["cf*", "demo*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
