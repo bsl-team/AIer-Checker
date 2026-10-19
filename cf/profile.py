@@ -32,6 +32,7 @@ FEATURE_SPECS: dict[str, tuple[str, str, Any, Any]] = {
     "space.around_pointer": ("str", "* & attachment in declarations", "name", "n/a"),
     "blank.max_in_block": ("int", "max consecutive blank rows inside a block", 1, 1),
     "blank.between_functions": ("int", "blank rows between top-level definitions", 1, 2),
+    "blank.between_methods": ("int", "blank rows between methods inside a class", 1, 1),
     "blank.after_open_brace": ("bool", "blank row right after an opening brace", False, False),
     "blank.before_close_brace": ("bool", "blank row right before a closing brace", False, False),
     "blank.file_start": ("bool", "file starts with a blank row", False, False),

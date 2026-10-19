@@ -315,8 +315,9 @@ class Extractor:
             self.rec("blank.after_open_brace", run >= 1, start)
         if next_row is not None and next_row.tokens and next_row.tokens[0].is_punct("}"):
             self.rec("blank.before_close_brace", run >= 1, start)
-        if next_row is not None and depth_at_next == 0 and self._is_def_row(next_row):
-            self.rec("blank.between_functions", min(run, 4), next_row.num)
+        if next_row is not None and self._is_def_row(next_row):
+            key = "blank.between_functions" if self._row_level(next_row.num) == 0 else "blank.between_methods"
+            self.rec(key, min(run, 4), next_row.num)
 
     def _is_def_row(self, row) -> bool:
         if not row.tokens:
