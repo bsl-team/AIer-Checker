@@ -134,6 +134,7 @@ class Formatter:
         self.reindent = any(
             self.enabled(k) for k in ("indent.size", "indent.type", "indent.continuation", "indent.namespace_body", "layout.case_indent")
         )
+        self.apply_indent_type = self.enabled("indent.type")
         self.quote_style = self._quote_style()
 
     # -- rule gating ----------------------------------------------------
@@ -527,7 +528,7 @@ class Formatter:
             elif piece.kind == "code" and piece.indent != piece.original_indent:
                 if piece.in_group:
                     self.flag("indent.continuation")
-                elif _indent_kind(piece.indent) != _indent_kind(piece.original_indent):
+                elif self.apply_indent_type and _indent_kind(piece.indent) != _indent_kind(piece.original_indent):
                     self.flag("indent.type")
                 else:
                     self.flag("indent.size")

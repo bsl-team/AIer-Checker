@@ -81,6 +81,14 @@ def test_rule_table_tracks_agreement_per_axis():
     assert row["findings"] >= 1
 
 
+def test_tab_file_and_space_profile_report_one_indent_conflict():
+    rep = analyze(docs("cpp_knr.cpp", "c_tabs.c"))
+    tabs = sample_path("c_tabs.c")
+    rules = {f.rule for f in rep.findings if f.file == tabs and f.kind == "against-profile"}
+    assert "indent.type" in rules
+    assert "indent.size" not in rules  # 1 tab vs 4 spaces is a single conflict
+
+
 def test_severity_helper_prefers_strict_rules():
     assert severity_for("indent.type", 0.96, "intra-file") == "high"
     assert severity_for("space.inside_parens", 0.95, "intra-file") == "low"

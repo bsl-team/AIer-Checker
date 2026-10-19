@@ -11,7 +11,6 @@ PROFILE_VERSION = 1
 FEATURE_SPECS: dict[str, tuple[str, str, Any, Any]] = {
     "indent.type": ("str", "indent characters", "space", "space"),
     "indent.size": ("int", "indent size", 4, 4),
-    "indent.unit_ratio": ("str", "indent unit is a multiple of the tab stop", "consistent", "consistent"),
     "indent.continuation": ("str", "continuation indent", 4, 4),
     "indent.namespace_body": ("str", "indent inside namespace/module bodies", "indent", "n/a"),
     "width.limit": ("int", "line length limit", 100, 88),
@@ -201,6 +200,9 @@ class Feature:
         return f
 
 
+SUM_STATS = {"rows", "code_rows", "tokens", "comments", "line_comments", "block_comments", "import_rows", "over_limit_rows"}
+
+
 @dataclass
 class Sample:
     path: str
@@ -327,11 +329,11 @@ class Profile:
         return p
 
     def merge_stats(self, other: dict) -> None:
-        """Measurements are aggregated, not voted on: maxima grow, sample counts refresh."""
+        """Counts add up across samples; width percentiles keep the widest value seen."""
         for k, v in other.items():
             cur = self.stats.get(k)
             if isinstance(v, (int, float)) and isinstance(cur, (int, float)):
-                self.stats[k] = max(cur, v)
+                self.stats[k] = cur + v if k in SUM_STATS else max(cur, v)
             elif cur is None:
                 self.stats[k] = v
         self.stats["samples"] = len(self.samples)

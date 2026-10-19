@@ -221,8 +221,14 @@ def _intra_file_findings(doc, prof: Profile, min_evidence, min_confidence, thres
     return out
 
 
+def _indent_type_deviates(prof: Profile, shared: Profile) -> bool:
+    feat, base = prof.features.get("indent.type"), shared.features.get("indent.type")
+    return bool(feat and base and feat.value and base.value and feat.value != base.value and feat.agreement >= 0.6)
+
+
 def _profile_findings(doc, prof: Profile, shared: Profile, min_evidence) -> list[Finding]:
     out: list[Finding] = []
+    indent_kind_differs = _indent_type_deviates(prof, shared)
     for key, base in sorted(shared.features.items()):
         if base.value is None or base.confidence < MIN_CONFIDENCE:
             continue
@@ -233,6 +239,8 @@ def _profile_findings(doc, prof: Profile, shared: Profile, min_evidence) -> list
             continue
         if feat.agreement < 0.6:
             continue  # the file itself is mixed; the intra-file pass already reported it
+        if key == "indent.size" and indent_kind_differs:
+            continue  # "1 tab" vs "4 spaces" is one conflict, not two
         sev = severity_for(key, feat.agreement, "against-profile")
         rows = sorted(feat.rows.get(feat.value, []))
         out.append(
