@@ -89,6 +89,22 @@ def test_tab_file_and_space_profile_report_one_indent_conflict():
     assert "indent.size" not in rules  # 1 tab vs 4 spaces is a single conflict
 
 
+def test_strict_axes_report_a_single_deviation():
+    # one tab among 20 space-indented rows is a defect, not a 5% noise level
+    src = "int main() {\n" + "".join(f"    int v{i} = {i};\n" for i in range(20)) + "\tint t = 99;\n}\n"
+    rep = analyze([build_document(src, "strict.c")])
+    rules = {f.rule for f in rep.findings}
+    assert "indent.type" in rules
+    assert [f for f in rep.findings if f.rule == "indent.type"][0].severity == "high"
+
+
+def test_non_strict_axes_ignore_an_isolated_blip_in_a_large_file():
+    rows = "".join("    x%d = 1;\n" % i for i in range(30))
+    src = "int main() {\n" + rows + "    q=2;\n}\n"
+    rep = analyze([build_document(src, "blip.c")])
+    assert [f for f in rep.findings if f.rule.startswith("space.around")] == []
+
+
 def test_severity_helper_prefers_strict_rules():
     assert severity_for("indent.type", 0.96, "intra-file") == "high"
     assert severity_for("space.inside_parens", 0.95, "intra-file") == "low"

@@ -6,6 +6,7 @@ from cf.document import build_document
 from cf.extract import extract, extract_all
 from cf.naming import classify
 from cf.profile import Profile
+from cf.tokens import Token
 from tests.util import read_sample, sample_path
 
 
@@ -167,6 +168,61 @@ def test_fragment_without_balanced_braces_is_analysable():
     prof = extract(build_document(src, "fragment.c"))
     assert prof.value("indent.size") == 4
     assert prof.feature("brace.style").value == "attach"
+
+
+def test_indent_unit_prefers_the_level_fitted_step():
+    from cf.extract import _indent_unit
+
+    assert _indent_unit([(4, 1), (8, 2), (12, 3), (8, 2), (4, 1)]) == 4
+    assert _indent_unit([(4, 2), (8, 3), (12, 4)]) == 4  # namespace bodies not indented
+    assert _indent_unit([(2, 1), (4, 2), (6, 3), (4, 2)]) == 2
+    assert _indent_unit([(1, 1), (2, 2), (3, 3), (1, 1)]) == 1  # tabs
+    assert _indent_unit([(8, 1), (16, 2)]) == 8
+    assert _indent_unit([]) == 4
+    assert _indent_unit([(3, 1), (3, 2), (3, 3)]) in (3, 6)
+
+
+def test_colon_style_is_measured_as_four_values():
+    from cf.extract import colon_style
+
+    def colon(before_gap):
+        return Token(kind="punct", text=":", row=1, col=3, end_row=1, end_col=4, gap=before_gap)
+
+    def following(after_gap):
+        return Token(kind="id", text="b", row=1, col=5, end_row=1, end_col=6, gap=after_gap)
+
+    assert colon_style(colon(1), following(1)) == "spaced"
+    assert colon_style(colon(0), following(1)) == "after"
+    assert colon_style(colon(1), following(0)) == "before"
+    assert colon_style(colon(0), following(0)) == "tight"
+
+
+def test_dict_and_range_for_colons_are_measured_but_slices_are_not():
+    from cf.extract import colon_context
+
+    assert colon_context(braces=1, parens=0, brackets=0, row_is_control=False)  # dict literal
+    assert colon_context(braces=0, parens=1, brackets=0, row_is_control=True)  # range-for
+    assert not colon_context(braces=0, parens=0, brackets=1, row_is_control=False)  # slice
+    assert not colon_context(braces=0, parens=1, brackets=0, row_is_control=False)  # annotation
+
+
+def test_namespace_body_indentation_is_its_own_axis():
+    indented = 'namespace n {\n    void f() {\n        int x = 1;\n    }\n}\n'
+    flush = 'namespace n {\nvoid f() {\n    int x = 1;\n}\n}\n'
+    assert extract(build_document(indented, "i.cpp")).value("indent.namespace_body") == "indent"
+    assert extract(build_document(flush, "f.cpp")).value("indent.namespace_body") == "none"
+
+
+def test_low_count_structural_rules_reach_a_usable_confidence():
+    src = "namespace n {\nclass C {\npublic:\n    void f() {}\n};\n}\n"
+    prof = extract(build_document(src, "n.cpp"))
+    assert prof.confidence("indent.namespace_body") >= 0.5
+    assert prof.confidence("brace.empty_block") >= 0.5
+
+
+def test_single_observation_of_a_common_rule_stays_weak():
+    prof = extract(build_document("int main() {\n    return 1 ;\n}\n", "s.c"))
+    assert prof.confidence("space.before_semicolon") < 0.5
 
 
 def test_defaults_fill_unobserved_features():
