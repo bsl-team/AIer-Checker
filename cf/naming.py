@@ -237,16 +237,6 @@ def _after_brace(toks, close_idx: int) -> bool:
     return False
 
 
-def _next_code_row(rows_by_num, num: int):
-    n = num + 1
-    while n in rows_by_num:
-        r = rows_by_num[n]
-        if r.blank:
-            n += 1
-            continue
-        return r
-    return None
-
 
 def _keyword_block_ranges(doc: Document, keywords) -> list[tuple[int, int]]:
     """Ranges of ``{ ... }`` bodies introduced by one of ``keywords``."""

@@ -12,7 +12,7 @@ import re
 from dataclasses import dataclass, field
 
 from .document import Document, build_document, text_width
-from .extract import ASSIGN_OPS, BIN_OPS, CONTROL_PAREN_KW, is_clike_definition, is_pointer_op
+from .extract import ASSIGN_OPS, BIN_OPS, CONTROL_PAREN_KW, colon_context, is_clike_definition, is_pointer_op
 from .profile import Profile
 from .tokens import CHR, CMT, ID, KW, NUM, PRE, PUNCT, STR, Token
 
@@ -39,6 +39,14 @@ NOT_REWRITTEN = {
 }
 
 ACCESS_KW = {"public", "private", "protected"}
+
+# Rules that rewrite string contents need near-uniform evidence: an author mixing ' and "
+# usually picks per string (escapes, nested quotes), so a 60% preference is not a style rule.
+HIGH_AGREEMENT = {
+    "quote.style": 0.85,
+    "blank.between_functions": 0.7,
+    "blank.between_methods": 0.7,
+}
 BRANCH_KW = {"else", "catch", "finally"}
 HEADER_KW = {"namespace", "extern", "template", "class", "struct", "enum", "union", "interface", "impl", "trait", "module"}
 
@@ -80,6 +88,7 @@ class Piece:
     indent: str = ""
     level: int = 0
     in_group: bool = False
+    open_after: int = 0          # brackets still open when this row ends
     def_rule: str | None = None
     case_row: bool = False
     comment_only: bool = False
@@ -113,9 +122,6 @@ def token_identity(src: str, path: str | None = None) -> list[tuple[str, str]]:
     return _normalise(build_document(src, path).token_stream())
 
 
-def format_document(doc: Document, profile: Profile, options: FormatOptions | None = None) -> FormatResult:
-    return Formatter(doc, profile, options or FormatOptions()).run()
-
 
 class Formatter:
     def __init__(self, doc: Document, profile: Profile, options: FormatOptions):
@@ -148,6 +154,10 @@ class Formatter:
             if feat.confidence < self.opts.min_confidence:
                 self.skipped.add(key)
                 return False
+            need = HIGH_AGREEMENT.get(key)
+            if need is not None and feat.agreement < need:
+                self.skipped.add(key)
+                return False
             return True
         if self.opts.use_defaults:
             return True
@@ -168,11 +178,17 @@ class Formatter:
         return n if 1 <= n <= 24 else default
 
     def _quote_style(self) -> str | None:
-        if not (self.doc.spec.single_quote_strings and self.doc.spec.double_quote_strings or self.doc.spec.name in ("python",)):
+        """Quote conversion needs a real observation: rewriting literals is not pure layout.
+
+        An empty profile would otherwise rewrite every ``'...'`` into ``"..."`` by family
+        default, and the author's per-string choice (nested quotes, escapes) is not layout.
+        """
+        if not (self.doc.spec.single_quote_strings and self.doc.spec.double_quote_strings or self.python):
             return None
-        if not (self.enabled("quote.style")):
+        feat = self.profile.feature("quote.style")
+        if feat is None or not feat.total or not self.enabled("quote.style"):
             return None
-        val = self.value("quote.style", None)
+        val = feat.value
         return val if val in ("single", "double") else None
 
     # -- driver ---------------------------------------------------------
@@ -187,7 +203,16 @@ class Formatter:
         pieces = self._pass_blanks(pieces)
         text = self._assemble(self._render(pieces))
         before = _normalise(self.doc.token_stream())
-        after = _normalise(build_document(text, self.doc.path, self.doc.spec).token_stream())
+        again = build_document(text, self.doc.path, self.doc.spec)
+        if again.parse_error and not self.doc.parse_error:
+            return FormatResult(
+                text=original,
+                changed=False,
+                applied=sorted(self.changed_rules),
+                skipped=sorted(self.skipped),
+                error=f"refused: the formatted text no longer lexes cleanly ({again.parse_error})",
+            )
+        after = _normalise(again.token_stream())
         if before != after:
             return FormatResult(
                 text=original,
@@ -202,10 +227,11 @@ class Formatter:
         out: list[Piece] = []
         cover = self._trivia_kinds()
         for row in self.doc.rows:
-            if row.blank:
-                out.append(Piece(kind="blank", original_indent=row.indent, raw=row.raw, row=row.num))
-            elif row.in_trivia:
+            if row.in_trivia:
+                # blank-looking rows inside a docstring are string content, not layout
                 out.append(Piece(kind="trivia", original_indent=row.indent, raw=row.raw, trivia_kind=cover.get(row.num, ""), row=row.num))
+            elif row.blank:
+                out.append(Piece(kind="blank", original_indent=row.indent, raw=row.raw, row=row.num))
             elif row.directive:
                 out.append(Piece(kind="directive", cells=[Cell(t) for t in row.tokens], original_indent=row.indent, raw=row.raw, row=row.num))
             else:
@@ -353,10 +379,15 @@ class Formatter:
 
     # -- pass 2: spacing -----------------------------------------------
     def _pass_spacing(self, pieces: list[Piece]) -> None:
+        depths = self.doc.token_depths()
         for piece in pieces:
             if piece.kind != "code":
                 continue
             depth = _Depths()
+            if piece.cells:
+                # seed from the global bracket state: a wrapped argument list has no opening
+                # bracket on this row, and would otherwise look like a plain assignment
+                depth.braces, depth.parens, depth.brackets = depths[piece.cells[0].tok.index]
             for idx, cell in enumerate(piece.cells):
                 tok = cell.tok
                 if idx > 0:
@@ -379,7 +410,7 @@ class Formatter:
             return self._spaced("space.after_keyword", False if self.python else True)
         if tok.is_punct(","):
             return self._spaced("space.before_comma", False)
-        if prev.is_punct(","):
+        if prev.is_punct(",") and not tok.is_punct(")", "]", "}"):
             return self._spaced("space.after_comma", True)
         if prev.is_punct("(") and not tok.is_punct(")"):
             return self._spaced("space.inside_parens", False)
@@ -389,9 +420,9 @@ class Formatter:
             return self._spaced("space.inside_brackets", False)
         if tok.is_punct("]") and not prev.is_punct("["):
             return self._spaced("space.inside_brackets", False)
-        if prev.is_punct("{") and depth.after_init_brace and not tok.is_punct("}"):
+        if prev.is_punct("{") and depth.in_brace_body and not tok.is_punct("}"):
             return self._spaced("space.inside_braces", False)
-        if tok.is_punct("}") and not prev.is_punct("{") and depth.before_init_brace:
+        if tok.is_punct("}") and not prev.is_punct("{") and depth.in_brace_body:
             return self._spaced("space.inside_braces", False)
         if tok.is_punct(";") and depth.parens > 0:
             return self._spaced("space.before_semicolon", False)
@@ -402,19 +433,17 @@ class Formatter:
         pointer = self._pointer_gap(cells, idx)
         if pointer is not None:
             return pointer
-        if tok.kind == PUNCT and prev.kind == PUNCT and (prev.text == "**" or tok.text == "**") and depth.parens > 0:
-            return (0, None)  # **kwargs / **expr stays tight
+        if tok.is_punct("**") or prev.is_punct("**"):
+            return (None, None)  # exponent / **kwargs / **ptr: spacing belongs to the operands
         operator = self._operator_gap(cells, idx, depth)
         if operator is not None:
             return operator
-        if self.python:
-            colon = self._python_colon_gap(cells, idx, depth)
-            if colon is not None:
-                return colon
-        elif tok.is_punct(":") and not prev.is_punct(":") and depth.colon_spaced:
-            return self._spaced("space.around_colon_in_for", True)
-        elif prev.is_punct(":") and not tok.is_punct(":") and depth.colon_spaced:
-            return self._spaced("space.around_colon_in_for", True)
+        row_control = cells[0].tok.kind == KW and cells[0].tok.text in CONTROL_PAREN_KW
+        colon_ok = colon_context(depth.braces, depth.parens, depth.brackets, row_control)
+        if tok.is_punct(":") and not prev.is_punct(":", "?") and colon_ok and not self._is_label_colon(cells, idx):
+            return self._colon_gap(before=True)
+        if prev.is_punct(":") and not tok.is_punct(":") and colon_ok and not self._is_label_colon(cells, idx - 1):
+            return self._colon_gap(before=False)
         if tok.is_punct(".", "->", "::") or prev.is_punct(".", "->", "::"):
             return (0, None)
         if tok.is_punct("...") or prev.is_punct("..."):
@@ -427,6 +456,24 @@ class Formatter:
         if not self.enabled(key):
             return (None, None)
         return (1 if bool(self.value(key, default)) else 0, key)
+
+    COLON_GAPS = {
+        "spaced": (1, 1),
+        "after": (0, 1),
+        "before": (1, 0),
+        "tight": (0, 0),
+        "true": (1, 1),  # profiles written before colon spacing became a four-way value
+        "false": (0, 0),
+    }
+
+    def _colon_gap(self, before: bool) -> tuple[int, str | None]:
+        key = "space.around_colon_in_for"
+        if not self.enabled(key):
+            return (None, None)
+        default = "after" if self.python else "spaced"
+        style = str(self.value(key, default))
+        gaps = self.COLON_GAPS.get(style, (1, 1))
+        return (gaps[0] if before else gaps[1], key)
 
     def _operator_gap(self, cells: list[Cell], idx: int, depth: _Depths) -> tuple[int, str | None] | None:
         tok = cells[idx].tok
@@ -466,13 +513,12 @@ class Formatter:
             return (1, "space.around_pointer")
         return None
 
-    def _python_colon_gap(self, cells: list[Cell], idx: int, depth: _Depths) -> tuple[int, str | None] | None:
-        if not (depth.braces > 0 or depth.brackets > 0):
-            return None
-        tok, prev = cells[idx].tok, cells[idx - 1].tok
-        if tok.is_punct(":") and not prev.is_punct(":") or prev.is_punct(":") and not tok.is_punct(":"):
-            return self._spaced("space.around_colon_in_for", True)
-        return None
+    def _is_label_colon(self, cells: list[Cell], j: int) -> bool:
+        """``case 1:`` / ``default:`` / ``goto:``, not a dict, slice or ternary colon."""
+        head = cells[0].tok
+        if head.kind == KW and head.text in ("case", "default"):
+            return True
+        return j == len(cells) - 1
 
     # -- pass 3: indentation -------------------------------------------
     def _pass_indent(self, pieces: list[Piece]) -> None:
@@ -497,10 +543,10 @@ class Formatter:
                 lvl = max(0, levels.get(piece.first.row, 0)) if self.python else count
                 piece.indent = self.unit_str * lvl
                 piece.level = lvl
-            elif opener is not None and piece.first is not None and piece.first.is_punct(")", "]"):
-                piece.indent = opener.indent_str
+            elif opener is not None and piece.first is not None and _closes(opener, piece.first):
+                piece.indent = self._closer_indent(opener, piece)
             elif opener is not None:
-                piece.indent = self._continuation_indent(opener)
+                piece.indent = self._continuation_or_keep(opener, piece)
             elif self.python:
                 lvl = max(0, levels.get(piece.first.row if piece.first else 1, 0))
                 piece.indent = self.unit_str * lvl
@@ -519,8 +565,9 @@ class Formatter:
                 piece.level = count + extra
             self._mark_def(piece, piece.level)
             braces_before = len(bstack)
-            for cell in piece.cells:
-                _feed(cell.tok, bstack, pstack, piece, _is_namespace_header(piece))
+            for cidx, cell in enumerate(piece.cells):
+                _feed(cell.tok, bstack, pstack, piece, cidx, _is_namespace_header(piece), self.python)
+            piece.open_after = len(pstack)
             if len(bstack) < braces_before and not bstack:
                 case_level = None
             if not self.reindent:
@@ -546,11 +593,30 @@ class Formatter:
             return True
         return False
 
+    def _closer_indent(self, opener: "_Group", piece: Piece) -> str:
+        """A bracket closer that the author aligned under its opener stays there."""
+        if text_width(piece.original_indent, 8) == opener.aligned:
+            return " " * opener.aligned
+        return opener.indent_str
+
+    def _continuation_or_keep(self, opener: "_Group", piece: Piece) -> str:
+        """A row the author already aligned under its bracket stays aligned.
+
+        Files often mix a profiled continuation step with hand-aligned argument lists; forcing
+        every row to one style fights the author's per-call choices and never converges.
+        """
+        if not self.enabled("indent.continuation"):
+            return piece.original_indent
+        wanted = self._continuation_indent(opener)
+        if text_width(piece.original_indent, 8) == opener.aligned:
+            return " " * opener.aligned
+        return wanted
+
     def _continuation_indent(self, opener: "_Group") -> str:
         if not self.enabled("indent.continuation"):
             return opener.indent_str + self.unit_str
         if self.continuation == "aligned":
-            return " " * (opener.indent_width + opener.col + 1)
+            return " " * opener.aligned
         try:
             delta = int(self.continuation)
         except (TypeError, ValueError):
@@ -649,7 +715,7 @@ class Formatter:
         cap = self._number("blank.max_in_block", 1) if self.enabled("blank.max_in_block") else None
         if cap is None:
             return 10 ** 6
-        inside = (nxt.level if nxt is not None else prev.level) > 0 or prev.in_group
+        inside = (nxt.level if nxt is not None else prev.level) > 0 or prev.open_after > 0
         return cap if inside else max(cap, 2)
 
     def _definition_gaps(self, pieces: list[Piece]) -> list[Piece]:
@@ -664,12 +730,14 @@ class Formatter:
                 anchor = out[anchor_idx] if anchor_idx >= 0 else None
                 glued_comment = anchor is not None and anchor.kind == "code" and (anchor.comment_only or _is_comment_start(piece))
                 opens_block = anchor is not None and anchor.last is not None and anchor.last.is_punct("{", ":")
+                decorated = anchor is not None and anchor.first is not None and anchor.first.is_punct("@")
                 if (
                     anchor is not None
                     and anchor.kind == "code"
-                    and not anchor.in_group
+                    and anchor.open_after == 0
                     and not glued_comment
                     and not opens_block
+                    and not decorated
                 ):
                     if prior < want:
                         out.extend(Piece(kind="blank") for _ in range(want - prior))
@@ -867,26 +935,20 @@ class _Depths:
             self.brackets = max(0, self.brackets - 1)
 
     @property
-    def after_init_brace(self) -> bool:
+    def in_brace_body(self) -> bool:
+        """Inside a ``{...}`` literal, where ``{ x }`` spacing is a real style choice."""
         return self.braces > 0
-
-    @property
-    def before_init_brace(self) -> bool:
-        return self.braces > 0
-
-    @property
-    def colon_spaced(self) -> bool:
-        return self.braces > 0 or self.brackets > 0 or self.parens > 0
 
 
 class _Group:
-    __slots__ = ("tok", "indent_str", "indent_width", "col")
+    __slots__ = ("tok", "indent_str", "indent_width", "col", "aligned")
 
-    def __init__(self, tok: Token, indent_str: str, col: int):
+    def __init__(self, tok: Token, indent_str: str, col: int, aligned: int):
         self.tok = tok
         self.indent_str = indent_str
         self.indent_width = text_width(indent_str, 8)
         self.col = col
+        self.aligned = aligned  # column a hanging element of this group sits at
 
 
 def _is_namespace_header(piece: Piece) -> bool:
@@ -894,19 +956,50 @@ def _is_namespace_header(piece: Piece) -> bool:
     return piece.kind == "code" and head is not None and head.kind == KW and head.text in ("namespace", "module", "extern")
 
 
-def _feed(tok: Token, bstack: list[str], pstack: list[_Group], piece: Piece, ns: bool) -> None:
+def _group_for(tok: Token, piece: Piece, idx: int) -> _Group:
+    """Record an opening bracket together with the column its elements hang at."""
+    indent_width = text_width(piece.indent, 8)
+    base = text_width(piece.original_indent, 8)
+    nxt = piece.cells[idx + 1].tok if idx + 1 < len(piece.cells) else None
+    if nxt is not None and nxt.row == tok.row:
+        aligned = indent_width + max(0, nxt.col - base)
+    else:
+        aligned = indent_width + _column_after(tok, piece) + 1
+    return _Group(tok, piece.indent, _column_after(tok, piece), aligned)
+
+
+def _feed(tok: Token, bstack: list[str], pstack: list[_Group], piece: Piece, idx: int, ns: bool, brace_is_group: bool = False) -> None:
+    """Track braces for block indentation and open groups for continuation rows.
+
+    ``{`` means a block in clike but a dict/set literal in python: with ``brace_is_group`` the
+    literal's rows are treated as continuations of the opening row, which is what keeps a
+    multi-line dict from being re-indented as if it were a function body.
+    """
     if tok.kind in (CMT, STR, CHR, PRE):
         return
     if tok.is_punct("{"):
         bstack.append("ns" if ns else "other")
+        if brace_is_group:
+            pstack.append(_group_for(tok, piece, idx))
     elif tok.is_punct("}"):
         if bstack:
             bstack.pop()
+        if brace_is_group and pstack and pstack[-1].tok.is_punct("{"):
+            pstack.pop()
     elif tok.is_punct("(", "["):
-        pstack.append(_Group(tok, piece.indent, _column_after(tok, piece)))
+        pstack.append(_group_for(tok, piece, idx))
     elif tok.is_punct(")", "]"):
         if pstack:
             pstack.pop()
+
+
+def _closes(group: "_Group", tok: Token) -> bool:
+    """Does ``tok`` close the bracket that ``group`` records?"""
+    return (
+        tok.is_punct(")") and group.tok.is_punct("(")
+        or tok.is_punct("]") and group.tok.is_punct("[")
+        or tok.is_punct("}") and group.tok.is_punct("{")
+    )
 
 
 def _column_after(tok: Token, piece: Piece) -> int:

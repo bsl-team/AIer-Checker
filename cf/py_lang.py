@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import ast
+import bisect
 import io
 import token as tokmod
 import tokenize
@@ -27,12 +28,18 @@ def tokenize_python(src: str) -> list[Token]:
     while i < len(raw):
         tok = raw[i]
         if tok.type == tokmod.FSTRING_START:
-            j, end = i, None
-            while j < len(raw):
-                if raw[j].type == tokmod.FSTRING_END:
-                    end = j
-                    break
-                j += 1
+            # f-strings nest in 3.12+: merge the whole span, not just up to the first FSTRING_END
+            depth = 0
+            end = None
+            for j in range(i, len(raw)):
+                kind = raw[j].type
+                if kind == tokmod.FSTRING_START:
+                    depth += 1
+                elif kind == tokmod.FSTRING_END:
+                    depth -= 1
+                    if depth == 0:
+                        end = j
+                        break
             if end is not None:
                 text = _slice(src, tok.start, raw[end].end)
                 toks.append(_emit(STR, text, tok.start, raw[end].end, last_end_row, last_end_col, len(toks)))
@@ -76,8 +83,14 @@ def _emit(kind: str, text: str, start: tuple[int, int], end: tuple[int, int], pr
 
 
 def python_levels(src: str) -> dict[int, int]:
-    """Block nesting level per row, taken from tokenize's INDENT/DEDENT stream."""
+    """Block nesting level per row, taken from tokenize's INDENT/DEDENT stream.
+
+    tokenize emits the pending DEDENTs on a comment-only row, so those rows (and blank ones)
+    read as if the block had closed.  A standalone comment belongs to the statement below it,
+    so those rows borrow the level of the next row that carries real code.
+    """
     levels: dict[int, int] = {}
+    code_rows: set[int] = set()
     level = 0
     readline = io.StringIO(src if src.endswith("\n") else src + "\n").readline
     try:
@@ -88,13 +101,23 @@ def python_levels(src: str) -> dict[int, int]:
                 levels[row] = level
             elif tok.type == tokmod.DEDENT:
                 level = max(0, level - 1)
-                levels[row] = level  # assign: several dedents can land on the same row
+                levels[row] = level
             elif tok.type in (tokmod.NEWLINE, tokmod.NL):
+                levels.setdefault(row, level)
+            elif tok.type == tokmod.COMMENT:
                 levels.setdefault(row, level)
             elif tok.type != tokmod.ENDMARKER:
                 levels.setdefault(row, level)
+                code_rows.add(row)
     except (tokenize.TokenError, IndentationError, SyntaxError):
         pass
+    ordered = sorted(code_rows)
+    for row in list(levels):
+        if row in code_rows or row == 0:
+            continue
+        idx = bisect.bisect_right(ordered, row)
+        if idx < len(ordered):
+            levels[row] = levels.get(ordered[idx], levels[row])
     return levels
 
 
@@ -242,10 +265,14 @@ class _Collector(ast.NodeVisitor):
 
     visit_AsyncFor = visit_For
 
-    def visit_withitem(self, node) -> None:
-        if isinstance(node.optional_vars, ast.Name):
-            self.sem.variables.append((node.lineno, node.optional_vars.id))
+    def visit_With(self, node) -> None:
+        # ``withitem`` carries no lineno of its own, so the enclosing statement is the anchor
+        for item in node.items:
+            if isinstance(item.optional_vars, ast.Name):
+                self.sem.variables.append((node.lineno, item.optional_vars.id))
         self.generic_visit(node)
+
+    visit_AsyncWith = visit_With
 
     def visit_ExceptHandler(self, node) -> None:
         if node.name:
@@ -296,20 +323,3 @@ def _dedup(items: list[tuple[int, str]]) -> list[tuple[int, str]]:
     return out
 
 
-def blank_line_pattern(doc: Document, sem: PythonSemantics) -> dict[str, float]:
-    """Blank rows before top-level defs/classes, and the largest blank run inside bodies."""
-    starts = {row for row, _ in sem.functions} | {row for row, _ in sem.classes}
-    before: dict[int, int] = {}
-    for row in sorted(starts):
-        if row - 1 < 1 or doc.row(row).indent.strip():
-            continue
-        n = 0
-        r = row - 1
-        while r >= 1 and doc.row(r).blank:
-            n += 1
-            r -= 1
-        before.setdefault(n, 0)
-        before[n] += 1
-    total = sum(before.values()) or 1
-    mode = max(before, key=lambda k: (before[k], -k))
-    return {"mode": float(mode), "coverage": before.get(mode, 0) / total, "observed": float(total)}

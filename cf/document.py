@@ -13,6 +13,7 @@ class Line:
     indent: str                  # leading whitespace
     tokens: list[Token] = field(default_factory=list)
     in_trivia: bool = False      # part of a multi-line comment/string body
+    in_string: bool = False      # part of a multi-line string body (layout-blind)
     directive: bool = False       # preprocessor / decorator line kept verbatim
 
     @property
@@ -91,10 +92,6 @@ class Document:
     def is_python(self) -> bool:
         return self.spec.family == "python"
 
-    @property
-    def row_count(self) -> int:
-        return len(self.lines)
-
     def row(self, num: int) -> Line:
         return self.rows[num - 1]
 
@@ -105,17 +102,18 @@ class Document:
         """Comparable identity of the file: whitespace-free, so formatters can be verified."""
         return [(t.kind, t.text) for t in self.tokens]
 
-    def rows_with_token(self, tok: Token) -> range:
-        return range(tok.row, tok.end_row + 1)
 
-    def token_depths(self) -> list[tuple[int, int]]:
-        """``(brace depth, paren depth)`` in front of each token, cached on first use."""
+    def token_depths(self) -> list[tuple[int, int, int]]:
+        """``(brace, paren, bracket)`` depth in front of each token, cached on first use.
+
+        Continuation rows need this: within a single row the bracket state is not visible, so
+        keyword arguments spread over several rows would otherwise look like plain assignments.
+        """
         if self._tdepths is None:
             out = []
-            braces = 0
-            parens = 0
+            braces = parens = brackets = 0
             for t in self.tokens:
-                out.append((braces, parens))
+                out.append((braces, parens, brackets))
                 if t.kind in (CMT, STR, PRE):
                     continue
                 if t.kind == PUNCT:
@@ -123,10 +121,14 @@ class Document:
                         braces += 1
                     elif t.text == "}":
                         braces = max(0, braces - 1)
-                    elif t.text in ("(", "["):
+                    elif t.text == "(":
                         parens += 1
-                    elif t.text in (")", "]"):
+                    elif t.text == ")":
                         parens = max(0, parens - 1)
+                    elif t.text == "[":
+                        brackets += 1
+                    elif t.text == "]":
+                        brackets = max(0, brackets - 1)
             self._tdepths = out
         return self._tdepths
 
@@ -151,6 +153,8 @@ def build_document(src: str, path: str | None = None, spec: Spec | None = None) 
         if t.end_row > t.row:
             for r in range(t.row + 1, min(t.end_row, len(rows)) + 1):
                 rows[r - 1].in_trivia = True
+                if t.kind == STR:
+                    rows[r - 1].in_string = True
         if t.kind == PRE:
             rows[t.row - 1].directive = True
     depths, parens = _depth_scan(rows, spec)
@@ -217,28 +221,5 @@ def brace_depth_before(doc: Document, row_num: int) -> int:
     return doc.depths[row_num - 1][0]
 
 
-def brace_delta(doc: Document, row_num: int) -> int:
-    d = doc.depths[row_num - 1]
-    return d[1] - d[0]
 
 
-def indent_level(doc: Document, row_num: int, unit: int | None = None) -> int:
-    """Nesting level of a row: braces for clike, visual indent / unit for python."""
-    row = doc.row(row_num)
-    if doc.is_python:
-        width = row.indent_width(unit or 4)
-        return int(round(width / (unit or 4)))
-    return brace_depth_before(doc, row_num)
-
-
-def is_function_definition(doc: Document, row_num: int) -> bool:
-    """Heuristic: a row that opens a function body (``f(args) {`` / ``def f(...):``)."""
-    row = doc.row(row_num)
-    toks = [t for t in row.tokens if t.kind != CMT]
-    if not toks:
-        return False
-    if doc.is_python:
-        return toks[0].is_kw("def", "async", "class")
-    if toks[-1].is_punct("{"):
-        return any(t.is_punct(")") for t in toks[:-1])
-    return False

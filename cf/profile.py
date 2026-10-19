@@ -28,7 +28,7 @@ FEATURE_SPECS: dict[str, tuple[str, str, Any, Any]] = {
     "space.before_call_paren": ("bool", "space before a call's (", False, False),
     "space.before_semicolon": ("bool", "space before ; inside for(...)", False, False),
     "space.after_semicolon": ("bool", "space after ; inside for(...)", True, True),
-    "space.around_colon_in_for": ("bool", "spaces around : in range-for / dict", True, False),
+    "space.around_colon_in_for": ("str", "spacing around a meaningful colon", "spaced", "after"),
     "space.around_pointer": ("str", "* & attachment in declarations", "name", "n/a"),
     "blank.max_in_block": ("int", "max consecutive blank rows inside a block", 1, 1),
     "blank.between_functions": ("int", "blank rows between top-level definitions", 1, 2),
@@ -63,14 +63,6 @@ FEATURE_SPECS: dict[str, tuple[str, str, Any, Any]] = {
     "include.grouping": ("str", "include/import grouping", "none", "none"),
 }
 
-BOOL_KEYS = {k for k, v in FEATURE_SPECS.items() if v[0] == "bool"}
-INT_KEYS = {k for k, v in FEATURE_SPECS.items() if v[0] == "int"}
-STR_KEYS = {k for k, v in FEATURE_SPECS.items() if v[0] == "str"}
-
-VALUE_LABEL = {
-    True: "yes",
-    False: "no",
-}
 
 RELIABILITY_K = 3.0  # shrinkage constant: confidence is pulled toward 0 for thin evidence
 MIN_EVIDENCE = {"int": 1, "bool": 2, "str": 2}

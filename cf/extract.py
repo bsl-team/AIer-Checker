@@ -13,14 +13,11 @@ from .tokens import CHR, CMT, ID, KW, NUM, PUNCT, PRE, STR, Token
 VIS_TAB = 8  # visual width used for line-length statistics
 
 CONTROL_PAREN_KW = {"if", "for", "while", "switch", "catch", "synchronized", "match", "case", "unless", "elif", "with", "do"}
-CALLISH_KW = {"func", "fn", "def"}
 BIN_OPS = {
     "+", "-", "*", "/", "%", "==", "!=", "<", ">", "<=", ">=", "&&", "||", "!==", "===",
     "<<", ">>", "&", "|", "^", "->", "=>", "==", "!=", "<=>",
 }
 ASSIGN_OPS = {"=", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<=", ">>=", ":=", "**="}
-ALL_CAP_KEYWORDS = {"NULL", "nullptr"}
-NO_SPACE_AFTER = {";"}
 
 
 @dataclass
@@ -82,7 +79,8 @@ class Extractor:
 
     # -- indentation ----------------------------------------------------
     def _indent(self) -> None:
-        rows: list[tuple[int, int]] = []
+        levels = self.indent_levels()
+        rows: list[tuple[int, int, int]] = []  # (width, level, row)
         for r in self.code_rows():
             if r.directive or not r.indent:
                 continue
@@ -94,22 +92,23 @@ class Extractor:
             self.rec("indent.type", kind, r.num)
             if kind == "mixed":
                 continue
-            rows.append((r.num, ind.count("\t") if kind == "tab" else len(ind)))
-        self.unit = _indent_unit([w for _, w in rows])
-        for num, width in rows:
+            width = ind.count("\t") if kind == "tab" else len(ind)
+            if width > 0:
+                rows.append((width, levels.get(r.num, 0), r.num))
+        self.unit = _indent_unit([(w, lv) for w, lv, _n in rows])
+        for width, _level, num in rows:
             fits = width % self.unit == 0
             self.rec("indent.size", self.unit if fits else f"irregular:{width}", num)
         self._continuation()
 
     def _continuation(self) -> None:
         row_group = _innermost_groups(self.doc)
-        unit = self.unit or 4
-        for num, (open_tok, opener_row) in sorted(row_group.items()):
+        for num, (open_tok, opener_row, aligned_col) in sorted(row_group.items()):
             r = self.doc.row(num)
             if not r.tokens:
                 continue
             first = r.tokens[0]
-            if first.col == open_tok.col + 1 and first.gap == 0:
+            if first.col == aligned_col or first.col == open_tok.col + 1:
                 self.rec("indent.continuation", "aligned", num)
                 continue
             base = self._indent_measure(self.doc.row(opener_row))
@@ -176,7 +175,7 @@ class Extractor:
     # -- intra-row spacing ----------------------------------------------
     def _spacing(self) -> None:
         toks = self.doc.tokens
-        skip_first_kw = {"case", "default"}
+        depths = self.doc.token_depths()
         for i, t in enumerate(toks):
             if t.kind in (CMT, STR, PRE):
                 continue
@@ -184,12 +183,16 @@ class Extractor:
             nx = toks[i + 1] if i + 1 < len(toks) else None
             right = nx is not None and nx.row == t.end_row and nx.kind != CMT
             left = pr is not None and t.gap >= 0 and pr.kind != CMT
+            braces, parens, brackets = depths[i]
+            first = self.doc.row(t.row).first
+            row_is_control = first is not None and first.kind == KW and first.text in CONTROL_PAREN_KW
+            row_is_label = first is not None and first.kind == KW and first.text in ("case", "default")
             if t.kind == KW and t.text in CONTROL_PAREN_KW and right and nx.is_punct("("):
                 self.rec("space.after_keyword", nx.gap > 0, t.row)
             elif t.kind == ID and right and nx.is_punct("(") and t.text not in ("return",):
                 self.rec("space.before_call_paren", nx.gap > 0, t.row)
             if t.is_punct(","):
-                if right:
+                if right and not nx.is_punct(")", "]", "}"):
                     self.rec("space.after_comma", nx.gap > 0, t.row)
                 if left and not pr.is_punct("("):
                     self.rec("space.before_comma", t.gap > 0, t.row)
@@ -210,15 +213,16 @@ class Extractor:
                 self.rec("space.before_semicolon", t.gap > 0, t.row)
                 self.rec("space.after_semicolon", nx.gap > 0, t.row)
             if t.is_punct(":") and left and right and not pr.is_punct("?", ":") and not nx.is_punct(":"):
-                if pr.kind in (ID, NUM, STR, CHR) or pr.is_punct(")", "]"):
-                    first = self.doc.row(t.row).first
-                    if not (first is not None and first.kind == KW and first.text in ("case", "default")):
-                        self.rec("space.around_colon_in_for", t.gap > 0 and nx.gap > 0, t.row)
+                if (pr.kind in (ID, NUM, STR, CHR) or pr.is_punct(")", "]")) and not row_is_label:
+                    if colon_context(braces, parens, brackets, row_is_control):
+                        self.rec("space.around_colon_in_for", colon_style(t, nx), t.row)
             if t.kind == PUNCT and t.text in ("*", "&", "&&"):
                 self._pointer(toks, i)
             if t.kind == PUNCT and (t.text in BIN_OPS or t.text in ASSIGN_OPS):
                 if t.text in ("<", ">") and t.gap == 0 and nx.gap == 0:
                     continue  # template angles such as vector<int>, not a comparison
+                if t.text == "**":
+                    continue  # exponent / **kwargs / **pointer: spacing depends on the operands
                 if left and right and self._is_binary(toks, i):
                     key = "space.around_assignment" if t.text in ASSIGN_OPS else "space.around_operators"
                     self.rec(key, t.gap > 0 and nx.gap > 0, t.row)
@@ -279,16 +283,20 @@ class Extractor:
         rows = self.doc.rows
         run = 0
         run_start = 0
+        run_in_string = False
         for idx, r in enumerate(rows):
             if r.blank:
                 if run == 0:
                     run_start = r.num
+                    run_in_string = r.in_string
                 run += 1
                 continue
             if run:
-                self._one_blank_run(run, run_start, idx)
-            run = 0
-        if run:
+                if not run_in_string:
+                    self._one_blank_run(run, run_start, idx)
+                run = 0
+                run_in_string = False
+        if run and not run_in_string:
             self._one_blank_run(run, run_start, len(rows) - 1)
 
     def _one_blank_run(self, run: int, start: int, end_idx: int) -> None:
@@ -521,16 +529,38 @@ class Extractor:
                     self.rec("semicolon.required", False, r.num)
 
 
-def _indent_unit(widths: list[int]) -> int:
-    """Largest unit in 1..8 that at least 60% of indents are an exact multiple of."""
-    vals = [w for w in widths if w > 0]
-    if not vals:
+def _indent_unit(pairs: list[tuple[int, int]]) -> int:
+    """Infer the indent step from ``(width, level)`` pairs.
+
+    Depth-anchored scoring first: it is exact for python (tokenize reports the level) and for
+    brace-aligned clike code.  When depth lies - a file that does not indent namespace bodies,
+    or ``case`` labels flush with their switch - fall back to scoring candidate units (the
+    distinct widths and their differences) by how many indents are an exact multiple of them.
+    """
+    widths = [w for w, _ in pairs if w > 0]
+    if not widths:
         return 4
-    for unit in range(8, 1, -1):
-        fit = sum(1 for w in vals if w % unit == 0) / len(vals)
-        if fit >= 0.6:
-            return unit
-    return 1
+    distinct = sorted(set(widths))
+    usable = [(w, lv) for w, lv in pairs if lv >= 1]
+    if len(usable) >= 3:
+        best_unit, best_hits = 0, 0
+        for unit in range(1, 13):
+            hits = sum(1 for w, lv in usable if w == unit * lv)
+            if hits > best_hits:
+                best_unit, best_hits = unit, hits
+        if best_hits / len(usable) >= 0.6:
+            return best_unit
+    cands = set(distinct) | {b - a for a, b in zip(distinct, distinct[1:])}
+    cands = {c for c in cands if 1 < c <= 12}
+    if cands:
+        def score(u: int) -> tuple[float, int]:
+            fit = sum(1 for w in widths if w % u == 0) / len(widths)
+            return (fit, u)
+
+        best = max(cands, key=score)
+        if score(best)[0] >= 0.6:
+            return best
+    return distinct[0] if distinct[0] <= 8 else 4
 
 
 def _percentile(values: list[int], pct: float) -> int:
@@ -606,6 +636,32 @@ def is_pointer_op(ppr, pr, tok, nx) -> bool:
     return False
 
 
+def colon_style(colon: Token, following: Token) -> str:
+    """How the author spaces a meaningful ``:`` - one boolean cannot describe dict habits."""
+    before, after = colon.gap > 0, following.gap > 0
+    if before and after:
+        return "spaced"
+    if after:
+        return "after"
+    if before:
+        return "before"
+    return "tight"
+
+
+def colon_context(braces: int, parens: int, brackets: int, row_is_control: bool) -> bool:
+    """Where a ``:`` spacing habit is meaningful.
+
+    Slices and subscripts (``a[1:2]``) want no spaces, annotations (``x: int``) want a space
+    only after, and range-for / dict literals want spaces around - one shared rule would
+    rewrite one of them wrongly, so only dict/set bodies and control-paren loops are measured.
+    """
+    if brackets > 0:
+        return False
+    if braces > 0:
+        return True
+    return parens > 0 and row_is_control
+
+
 def _indent_chars(text: str) -> int:
     """Indent measured in the file's own indent characters (tabs count as one)."""
     if text and "\t" in text and " " not in text:
@@ -673,7 +729,7 @@ def _match(toks: list[Token], open_idx: int) -> int | None:
 
 
 def _groups(doc: Document) -> list[dict]:
-    """Bracket groups that span more than one row."""
+    """Bracket groups that span more than one row, with the column their elements align to."""
     toks = doc.tokens
     stack: list[int] = []
     out = []
@@ -686,20 +742,22 @@ def _groups(doc: Document) -> list[dict]:
             oi = stack.pop()
             ot = toks[oi]
             if t.row > ot.row and ot.kind == PUNCT and t.text == _PAIRS[ot.text]:
-                out.append({"open": ot, "close": t, "open_idx": oi, "close_idx": i})
+                nxt = toks[oi + 1] if oi + 1 < len(toks) and toks[oi + 1].row == ot.row else None
+                aligned = nxt.col if nxt is not None else ot.col + 1
+                out.append({"open": ot, "close": t, "open_idx": oi, "close_idx": i, "aligned": aligned})
     return out
 
 
-def _innermost_groups(doc: Document) -> dict[int, tuple[Token, int]]:
-    """Map each wrapped row to the innermost bracket group it continues."""
-    out: dict[int, tuple[Token, int]] = {}
+def _innermost_groups(doc: Document) -> dict[int, tuple[Token, int, int]]:
+    """Map each wrapped row to ``(innermost opener, opener row, aligned column)``."""
+    out: dict[int, tuple[Token, int, int]] = {}
     for grp in sorted(_groups(doc), key=lambda g: g["open_idx"]):
         ot, ct = grp["open"], grp["close"]
         for row in range(ot.row + 1, ct.row + 1):
             first = doc.row(row).first if row <= len(doc.rows) else None
             if first is not None and first.index == ct.index:
                 continue  # the row that only closes the group is not a continuation
-            out[row] = (ot, ot.row)
+            out[row] = (ot, ot.row, grp["aligned"])
     return out
 
 

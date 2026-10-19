@@ -273,6 +273,79 @@ def test_preprocessor_lines_are_left_verbatim():
     assert stream(out, "t.c") == stream(src, "t.c")
 
 
+def test_python_dict_literal_rows_keep_their_alignment():
+    src = 'MAP = {\n    "a": 1,\n    "b": 2,\n}\n'
+    prof = profile_of(language="python", family="python", **{"indent.size": 4, "quote.style": "double"})
+    out = fmt(src, "d.py", prof)
+    assert '\n    "a": 1,\n    "b": 2,\n}' in out  # dict bodies are not re-indented to column 0
+    assert stream(out, "d.py") == stream(src, "d.py")
+
+
+def test_decorator_stays_glued_to_its_definition():
+    src = "class A:\n    @property\n    def x(self):\n        return 1\n"
+    prof = profile_of(language="python", family="python", **{"indent.size": 4, "blank.between_methods": 1})
+    out = fmt(src, "d.py", prof)
+    assert "@property\n    def x(self):" in out
+    assert "@property\n\n    def x" not in out
+
+
+def test_aligned_closer_stays_under_its_opener():
+    src = 'x = ["a",\n     "b",\n     ]\n'
+    prof = profile_of(language="python", family="python", **{"indent.size": 4})
+    out = fmt(src, "d.py", prof)
+    assert out == src
+    assert stream(out, "d.py") == stream(src, "d.py")
+
+
+def test_comment_rows_follow_their_block_not_the_dedent():
+    src = "def f():\n    # inside\n    return 1\n"
+    prof = profile_of(language="python", family="python", **{"indent.size": 4})
+    out = fmt(src, "d.py", prof)
+    assert "    # inside\n    return 1" in out
+
+
+def test_double_star_spacing_is_left_to_the_author():
+    src = "def f(a, **kw):\n    return a ** 2, 2**31\n"
+    prof = profile_of(language="python", family="python", **{"indent.size": 4, "space.around_operators": True})
+    out = fmt(src, "d.py", prof)
+    assert "2**31" in out
+    assert "**kw" in out
+
+
+def test_slice_colon_is_not_treated_as_a_dict_colon():
+    src = "def f(seq):\n    return seq[1:2]\n"
+    prof = profile_of(language="python", family="python", **{"indent.size": 4, "space.around_colon_in_for": True})
+    out = fmt(src, "d.py", prof)
+    assert "seq[1:2]" in out
+    assert "[1 : 2]" not in out
+
+
+def test_colon_style_is_applied_as_measured():
+    src = "def f():\n    return {'a':1}\n"
+    prof = profile_of(language="python", family="python", **{"indent.size": 4, "space.around_colon_in_for": "after", "quote.style": "double"})
+    assert '{"a": 1}' in fmt(src, "d.py", prof)
+    prof = profile_of(language="python", family="python", **{"indent.size": 4, "space.around_colon_in_for": "spaced"})
+    assert "{'a' : 1}" in fmt(src, "d.py", prof)
+    prof = profile_of(language="python", family="python", **{"indent.size": 4, "space.around_colon_in_for": "tight"})
+    assert "{'a':1}" in fmt(src, "d.py", prof)
+
+
+def test_range_for_colon_defaults_to_spaced_in_clike():
+    src = "void f() {\n    for (auto &x : v) {\n        use(x);\n    }\n}\n"
+    prof = profile_of(**{"indent.size": 4, "brace.style": "attach"})
+    out = fmt(src, "r.cpp", prof)
+    assert "for (auto &x : v) {" in out
+    assert stream(out, "r.cpp") == stream(src, "r.cpp")
+
+
+def test_unobserved_quote_style_never_rewrites_literals():
+    src = "x = 'a'\ny = \"b\"\n"
+    prof = profile_of(language="python", family="python", **{"indent.size": 4})
+    assert fmt(src, "q.py", prof) == src
+    prof = profile_of(language="python", family="python", **{"indent.size": 4, "quote.style": "double"})
+    assert fmt(src, "q.py", prof) == 'x = "a"\ny = "b"\n'
+
+
 def test_python_dedent_to_module_level_is_exact():
 
     src = "class A:\n    def m(self):\n        return 1\n\n\ndef top():\n    return 2\n"
