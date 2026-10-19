@@ -12,7 +12,8 @@ FEATURE_SPECS: dict[str, tuple[str, str, Any, Any]] = {
     "indent.type": ("str", "indent characters", "space", "space"),
     "indent.size": ("int", "indent size", 4, 4),
     "indent.unit_ratio": ("str", "indent unit is a multiple of the tab stop", "consistent", "consistent"),
-    "indent.continuation": ("int", "continuation indent", 4, 4),
+    "indent.continuation": ("str", "continuation indent", 4, 4),
+    "indent.namespace_body": ("str", "indent inside namespace/module bodies", "indent", "n/a"),
     "width.limit": ("int", "line length limit", 100, 88),
     "brace.style": ("str", "opening brace placement", "attach", "n/a"),
     "brace.close_same_row_branch": ("bool", "} else { on one row", True, False),
@@ -75,6 +76,28 @@ VALUE_LABEL = {
 RELIABILITY_K = 3.0  # shrinkage constant: confidence is pulled toward 0 for thin evidence
 MIN_EVIDENCE = {"int": 1, "bool": 2, "str": 2}
 
+# Structural facts appear only once or twice per file (a file has one namespace style), so the
+# generic shrinkage would keep them permanently below any usable threshold.
+LOW_COUNT_RULES = {
+    "indent.namespace_body": 1.0,
+    "brace.empty_block": 1.0,
+    "brace.close_same_row_branch": 1.0,
+    "layout.case_indent": 1.0,
+    "space.around_pointer": 1.0,
+    "blank.after_open_brace": 1.0,
+    "blank.before_close_brace": 1.0,
+    "blank.file_start": 1.0,
+    "blank.file_end": 1.0,
+    "blank.final_newline": 1.0,
+    "comment.doc_style": 1.0,
+    "include.order": 1.0,
+    "include.grouping": 1.0,
+}
+
+
+def reliability_for(rule: str) -> float:
+    return LOW_COUNT_RULES.get(rule, RELIABILITY_K)
+
 
 def label_for(value: Any) -> str:
     if isinstance(value, bool):
@@ -123,7 +146,7 @@ class Feature:
         """Agreement shrunk by how thin the evidence is, so 1 observation never looks like a rule."""
         if not self.total:
             return 0.0
-        reliability = self.total / (self.total + RELIABILITY_K)
+        reliability = self.total / (self.total + reliability_for(self.key))
         return round(self.agreement * reliability, 3)
 
     @property

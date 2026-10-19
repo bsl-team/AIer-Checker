@@ -57,6 +57,7 @@ class Extractor:
     # -- entry ----------------------------------------------------------
     def run(self) -> Profile:
         self._indent()
+        self._namespace_indent()
         self._width()
         self._braces()
         self._spacing()
@@ -200,10 +201,11 @@ class Extractor:
                 self.rec("space.inside_brackets", nx.gap > 0, t.row)
             if t.is_punct("]") and left and not pr.is_punct("["):
                 self.rec("space.inside_brackets", t.gap > 0, t.row)
-            if t.is_punct("{") and pr.is_punct("=", ",", "[", "{", ":", "(") and right and not nx.is_punct("}"):
-                self.rec("space.inside_braces", nx.gap > 0, t.row)
-            if t.is_punct("}") and pr.is_punct("=", ",", "[", "{", ":") and left and not pr.is_punct("{"):
-                self.rec("space.inside_braces", t.gap > 0, t.row)
+            if t.is_punct("{") and right:
+                close = _same_row_close(toks, i)
+                if close is not None and close > i + 1:
+                    self.rec("space.inside_braces", toks[i + 1].gap > 0, t.row)
+                    self.rec("space.inside_braces", toks[close].gap > 0, t.row)
             if t.is_punct(";") and left and right and _inside_paren(self.doc, toks, i):
                 self.rec("space.before_semicolon", t.gap > 0, t.row)
                 self.rec("space.after_semicolon", nx.gap > 0, t.row)
@@ -225,20 +227,16 @@ class Extractor:
         t = toks[i]
         pr = toks[i - 1] if i >= 1 else None
         nx = toks[i + 1] if i + 1 < len(toks) else None
-        if pr is None or nx is None or nx.kind != ID:
-            return
-        if pr.kind not in (ID, KW) or pr.row != t.row or nx.row != t.row:
-            return
         ppr = toks[i - 2] if i >= 2 else None
-        if ppr is not None and ppr.kind == PUNCT and ppr.text not in ("(", ",", ";", "{", "}", "[", "*", "&", "::", "->", "<", ">"):
-            return  # looks like arithmetic, not a declaration
         if ppr is not None and ppr.row != t.row:
             ppr = None
+        if not is_pointer_op(ppr, pr, t, nx):
+            return
         value = None
         if t.gap > 0 and nx.gap == 0:
-            value = "type"
+            value = "name"  # `int *p`: the star hugs the name
         elif t.gap == 0 and nx.gap > 0:
-            value = "name"
+            value = "type"  # `int* p`: the star hugs the type
         elif t.gap > 0 and nx.gap > 0:
             value = "spaced"
         if value:
@@ -326,8 +324,34 @@ class Extractor:
             return row.first.kind == KW and row.first.text in ("def", "async", "class")
         if self._row_level(row.num) != 0:
             return False
-        rtoks = [t for t in row.tokens if t.kind != CMT]
-        return bool(rtoks) and (rtoks[-1].is_punct("{") or any(t.is_punct("{") for t in rtoks))
+        return is_clike_definition([t for t in row.tokens if t.kind != CMT])
+
+    def _namespace_indent(self) -> None:
+        """Does the author indent the body of ``namespace X {``? C++ styles split evenly here."""
+        if self.is_python():
+            return
+        rows = self.doc.rows
+        for idx, row in enumerate(rows):
+            first = row.first
+            if first is None or first.kind != KW or first.text not in ("namespace", "module"):
+                continue
+            if not any(t.is_punct("{") for t in row.tokens if t.kind != CMT):
+                continue
+            base = _indent_chars(row.indent)
+            unit = self.unit or 4
+            for nxt in rows[idx + 1 :]:
+                if nxt.blank or nxt.in_trivia or not nxt.tokens:
+                    continue
+                inner = _indent_chars(nxt.indent)
+                if inner == base:
+                    self.rec("indent.namespace_body", "none", nxt.num)
+                elif inner == base + unit:
+                    self.rec("indent.namespace_body", "indent", nxt.num)
+                elif inner < base:
+                    self.rec("indent.namespace_body", "flush", nxt.num)
+                else:
+                    self.rec("indent.namespace_body", "other", nxt.num)
+                break
 
     # -- comments -------------------------------------------------------
     def _comments(self) -> None:
@@ -534,6 +558,61 @@ def _line_length_limit(widths: list[int]) -> tuple[int, float]:
     return max(widths), 0.4
 
 
+TYPEISH_KW = {
+    "class", "struct", "enum", "union", "namespace", "interface", "impl", "trait",
+    "template", "module", "extern", "func", "fn", "def", "record",
+}
+
+
+def is_clike_definition(toks: list[Token]) -> bool:
+    """A row that opens a top-level definition: it must contain ``{`` and look like a header."""
+    if not toks:
+        return False
+    if not any(t.is_punct("{") for t in toks):
+        return False
+    if any(t.is_punct(")") for t in toks):
+        return True
+    return toks[0].kind == KW and toks[0].text in TYPEISH_KW
+
+
+POINTER_PPR_PUNCT = {"(", ",", ";", "{", "}", "[", "*", "&", "::", "->", "<", ">"}
+POINTER_PPR_KW = {
+    "const", "constexpr", "static", "extern", "inline", "virtual", "explicit", "mutable",
+    "typedef", "unsigned", "signed", "register", "thread_local", "volatile", "auto",
+    "struct", "class", "union", "enum",
+}
+
+
+def is_pointer_op(ppr, pr, tok, nx) -> bool:
+    """Is ``tok`` a ``*``/``&`` declarator rather than multiplication or bitwise-and?
+
+    Requires a type-ish token on the left, a name on the right, and a left neighbour that
+    still makes declaration sense: ``return a * b`` and ``c = a * b`` are arithmetic.
+    """
+    if tok is None or tok.kind != PUNCT or tok.text not in ("*", "&", "&&"):
+        return False
+    if pr is None or nx is None:
+        return False
+    if pr.kind not in (ID, KW) or nx.kind != ID:
+        return False
+    if pr.row != tok.row or nx.row != tok.row:
+        return False
+    if ppr is None:
+        return True
+    if ppr.kind == PUNCT:
+        return ppr.text in POINTER_PPR_PUNCT
+    if ppr.kind == KW:
+        return ppr.text in POINTER_PPR_KW
+    return False
+
+
+def _indent_chars(text: str) -> int:
+    """Indent measured in the file's own indent characters (tabs count as one)."""
+    if text and "\t" in text and " " not in text:
+        return text.count("\t")
+    return len(text)
+
+
 def extract(doc: Document) -> Profile:
     """All feature observations for a single document."""
     return Extractor(doc).run()
@@ -622,6 +701,14 @@ def _innermost_groups(doc: Document) -> dict[int, tuple[Token, int]]:
                 continue  # the row that only closes the group is not a continuation
             out[row] = (ot, ot.row)
     return out
+
+
+def _same_row_close(toks: list[Token], open_idx: int) -> int | None:
+    """Index of the ``}`` that closes the brace at ``open_idx``, when it is on the same row."""
+    close = _match(toks, open_idx)
+    if close is None or toks[close].row != toks[open_idx].row:
+        return None
+    return close
 
 
 def _inside_paren(doc: Document, toks: list[Token], i: int) -> bool:

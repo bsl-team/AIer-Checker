@@ -12,15 +12,36 @@ from .tokens import CMT, ID, KW, NUM, PUNCT, SPEC_BY_NAME, STR, Token
 
 
 def tokenize_python(src: str) -> list[Token]:
-    """Tokenize Python source into the kernel's token model (whitespace stays implicit)."""
+    """Tokenize Python source into the kernel's token model (whitespace stays implicit).
+
+    Python 3.12+ splits f-strings into several tokens; they are merged back into one string
+    token so a reformat can never re-space the inside of a template.
+    """
     kw = SPEC_BY_NAME["python"].keywords
     toks: list[Token] = []
     last_end_row = -1
     last_end_col = -1
     readline = io.StringIO(src if src.endswith("\n") else src + "\n").readline
-    for tok in tokenize.generate_tokens(readline):
+    raw = list(tokenize.generate_tokens(readline))
+    i = 0
+    while i < len(raw):
+        tok = raw[i]
+        if tok.type == tokmod.FSTRING_START:
+            j, end = i, None
+            while j < len(raw):
+                if raw[j].type == tokmod.FSTRING_END:
+                    end = j
+                    break
+                j += 1
+            if end is not None:
+                text = _slice(src, tok.start, raw[end].end)
+                toks.append(_emit(STR, text, tok.start, raw[end].end, last_end_row, last_end_col, len(toks)))
+                last_end_row, last_end_col = raw[end].end[0], raw[end].end[1]
+                i = end + 1
+                continue
         kind = tok.type
         if kind in (tokmod.NEWLINE, tokmod.NL, tokmod.INDENT, tokmod.DEDENT, tokmod.ENDMARKER, tokmod.ENCODING):
+            i += 1
             continue
         if kind == tokmod.COMMENT:
             k = CMT
@@ -33,16 +54,25 @@ def tokenize_python(src: str) -> list[Token]:
         elif kind == tokmod.OP:
             k = PUNCT
         else:
+            i += 1
             continue
-        srow, scol = tok.start
-        erow, ecol = tok.end
-        gap = -1 if srow != last_end_row else scol - last_end_col
-        toks.append(
-            Token(kind=k, text=tok.string, row=srow, col=scol, end_row=erow, end_col=ecol,
-                  gap=gap, index=len(toks))
-        )
-        last_end_row, last_end_col = erow, ecol
+        toks.append(_emit(k, tok.string, tok.start, tok.end, last_end_row, last_end_col, len(toks)))
+        last_end_row, last_end_col = tok.end[0], tok.end[1]
+        i += 1
     return toks
+
+
+def _slice(src: str, start: tuple[int, int], end: tuple[int, int]) -> str:
+    rows = src.split("\n")
+    if start[0] == end[0]:
+        return rows[start[0] - 1][start[1] : end[1]]
+    parts = [rows[start[0] - 1][start[1] :]] + rows[start[0] : end[0] - 1] + [rows[end[0] - 1][: end[1]]]
+    return "\n".join(parts)
+
+
+def _emit(kind: str, text: str, start: tuple[int, int], end: tuple[int, int], prev_row: int, prev_col: int, index: int) -> Token:
+    gap = -1 if start[0] != prev_row else start[1] - prev_col
+    return Token(kind=kind, text=text, row=start[0], col=start[1], end_row=end[0], end_col=end[1], gap=gap, index=index)
 
 
 def python_levels(src: str) -> dict[int, int]:
@@ -58,7 +88,7 @@ def python_levels(src: str) -> dict[int, int]:
                 levels[row] = level
             elif tok.type == tokmod.DEDENT:
                 level = max(0, level - 1)
-                levels.setdefault(row, level)
+                levels[row] = level  # assign: several dedents can land on the same row
             elif tok.type in (tokmod.NEWLINE, tokmod.NL):
                 levels.setdefault(row, level)
             elif tok.type != tokmod.ENDMARKER:
