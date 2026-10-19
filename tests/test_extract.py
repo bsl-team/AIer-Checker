@@ -1,0 +1,178 @@
+import json
+
+import pytest
+
+from cf.document import build_document
+from cf.extract import extract, extract_all
+from cf.naming import classify
+from cf.profile import Profile
+from tests.util import read_sample, sample_path
+
+
+@pytest.fixture(scope="module")
+def knr():
+    return extract(build_document(read_sample("cpp_knr.cpp"), sample_path("cpp_knr.cpp")))
+
+
+@pytest.fixture(scope="module")
+def allman():
+    return extract(build_document(read_sample("cpp_allman.cpp"), sample_path("cpp_allman.cpp")))
+
+
+@pytest.fixture(scope="module")
+def tabs_c():
+    return extract(build_document(read_sample("c_tabs.c"), sample_path("c_tabs.c")))
+
+
+@pytest.fixture(scope="module")
+def py():
+    return extract(build_document(read_sample("py_default.py"), sample_path("py_default.py")))
+
+
+@pytest.fixture(scope="module")
+def js():
+    return extract(build_document(read_sample("js_single.js"), sample_path("js_single.js")))
+
+
+@pytest.fixture(scope="module")
+def go():
+    return extract(build_document(read_sample("go_style.go"), sample_path("go_style.go")))
+
+
+@pytest.fixture(scope="module")
+def messy():
+    return extract(build_document(read_sample("mixed.cpp"), sample_path("mixed.cpp")))
+
+
+def test_classify_names():
+    assert classify("calculate_total") == "snake_case"
+    assert classify("calculateTotal") == "camelCase"
+    assert classify("MaxParts") == "PascalCase"
+    assert classify("MAX_PARTS") == "UPPER_SNAKE_CASE"
+    assert classify("x") is None
+    assert classify("sum") is None  # one lowercase word proves nothing
+    assert classify("__init__") is None
+    assert classify("_private_helper") == "snake_case"
+
+
+def test_knr_indent_brace_and_spacing(knr):
+    assert knr.language == "cpp"
+    assert knr.value("indent.type") == "space"
+    assert knr.value("indent.size") == 4
+    assert knr.value("brace.style") == "attach"
+    assert knr.value("space.after_keyword") is True
+    assert knr.value("space.before_call_paren") is False
+    assert knr.value("space.inside_parens") is False
+    assert knr.value("naming.type") == "PascalCase"
+    assert knr.confidence("indent.size") > 0.7
+
+
+def test_allman_braces_detected_as_next_line(allman):
+    assert allman.value("brace.style") == "next"
+    assert allman.value("indent.size") == 4
+    assert allman.confidence("brace.style") > 0.5
+
+
+def test_tab_indented_c_file(tabs_c):
+    assert tabs_c.value("indent.type") == "tab"
+    assert tabs_c.value("indent.size") == 1
+    assert tabs_c.value("naming.macro") == "UPPER_SNAKE_CASE"
+    assert tabs_c.value("space.after_keyword") is True
+
+
+def test_python_profile_uses_ast_and_tokenize(py):
+    assert py.family == "python"
+    assert py.language == "python"
+    assert py.value("indent.type") == "space"
+    assert py.value("indent.size") == 4
+    assert py.value("quote.style") == "double"
+    assert py.value("blank.between_functions") == 2
+    assert py.value("naming.function") == "snake_case"
+    assert py.value("naming.type") == "PascalCase"
+    assert py.value("comment.doc_style") == "docstring"
+    # python has no block braces, so the brace axis must stay unobserved
+    assert py.feature("brace.style") is None or py.feature("brace.style").total == 0
+
+
+def test_js_profile(js):
+    assert js.value("indent.size") == 2
+    assert js.value("quote.style") == "single"
+    assert js.value("semicolon.required") is True
+    assert js.value("naming.constant") == "UPPER_SNAKE_CASE"
+    assert js.value("layout.trailing_comma") is True
+
+
+def test_go_profile(go):
+    assert go.value("indent.type") == "tab"
+    assert go.value("naming.function") == "camelCase"
+    assert go.value("naming.type") == "PascalCase"
+    assert go.value("semicolon.required") is None or go.confidence("semicolon.required") == 0.0
+
+
+def test_inconsistent_sample_keeps_evidence_of_deviations(messy):
+    brace = messy.feature("brace.style")
+    assert brace.value == "attach"
+    assert brace.counts.get("next") == 3
+    assert messy.feature("indent.type").counts.get("tab") == 1
+    assert messy.feature("indent.size").counts.get("4") == 25
+    kw = messy.feature("space.after_keyword")
+    assert kw.value == "true" and kw.counts.get("false") == 1
+    assert messy.stats["max_line_width"] > messy.value("width.limit") or messy.stats["over_limit_rows"] == 0
+
+
+def test_outlier_rows_point_at_the_offending_lines(messy):
+    rows = dict(messy.feature("brace.style").outlier_rows())
+    assert "next" in rows and rows["next"]
+    line = rows["next"][0]
+    assert messy.samples[0].path
+    text = build_document(read_sample("mixed.cpp"), sample_path("mixed.cpp")).row(line).raw
+    assert text.strip().startswith("{")
+
+
+def test_extract_all_merges_conflicting_samples():
+    docs = [
+        build_document(read_sample("cpp_knr.cpp"), sample_path("cpp_knr.cpp")),
+        build_document(read_sample("cpp_allman.cpp"), sample_path("cpp_allman.cpp")),
+    ]
+    merged = extract_all(docs)
+    brace = merged.feature("brace.style")
+    assert brace.counts["attach"] > 0 and brace.counts["next"] > 0
+    assert brace.confidence < 1.0
+    assert len(merged.samples) == 2
+    assert merged.stats["samples"] == 2
+
+
+def test_profile_json_roundtrip():
+    docs = [build_document(read_sample("cpp_knr.cpp"), sample_path("cpp_knr.cpp"))]
+    prof = extract_all(docs)
+    prof.user = "tester"
+    data = json.loads(json.dumps(prof.to_dict()))
+    back = Profile.from_dict(data)
+    assert back.user == "tester"
+    assert back.value("indent.size") == 4
+    assert back.feature("brace.style").counts == prof.feature("brace.style").counts
+    assert back.stats["max_line_width"] == prof.stats["max_line_width"]
+
+
+def test_empty_input_still_produces_defaults():
+    prof = extract_all([])
+    eff = prof.effective()
+    assert prof.value("indent.size") is None
+    assert eff["indent.size"][0] == 4
+    assert eff["space.after_keyword"][0] is True
+
+
+def test_fragment_without_balanced_braces_is_analysable():
+    src = "int main() {\n    printf(\"%d\", x);\n"
+    prof = extract(build_document(src, "fragment.c"))
+    assert prof.value("indent.size") == 4
+    assert prof.feature("brace.style").value == "attach"
+
+
+def test_defaults_fill_unobserved_features():
+    src = "x = 1\n"
+    prof = extract(build_document(src, "a.py"))
+    eff = prof.effective()
+    assert prof.confidence("indent.size") == 0.0
+    assert eff["indent.size"][0] == 4
+    assert eff["indent.size"][2] is False  # not observed, family default

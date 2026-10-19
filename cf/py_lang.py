@@ -45,6 +45,29 @@ def tokenize_python(src: str) -> list[Token]:
     return toks
 
 
+def python_levels(src: str) -> dict[int, int]:
+    """Block nesting level per row, taken from tokenize's INDENT/DEDENT stream."""
+    levels: dict[int, int] = {}
+    level = 0
+    readline = io.StringIO(src if src.endswith("\n") else src + "\n").readline
+    try:
+        for tok in tokenize.generate_tokens(readline):
+            row = tok.start[0]
+            if tok.type == tokmod.INDENT:
+                level += 1
+                levels[row] = level
+            elif tok.type == tokmod.DEDENT:
+                level = max(0, level - 1)
+                levels.setdefault(row, level)
+            elif tok.type in (tokmod.NEWLINE, tokmod.NL):
+                levels.setdefault(row, level)
+            elif tok.type != tokmod.ENDMARKER:
+                levels.setdefault(row, level)
+    except (tokenize.TokenError, IndentationError, SyntaxError):
+        pass
+    return levels
+
+
 @dataclass
 class PythonSemantics:
     functions: list[tuple[int, str]] = field(default_factory=list)

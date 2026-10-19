@@ -35,7 +35,7 @@ class Line:
         return expand_width(self.indent, tab)
 
     def width(self, tab: int = 8) -> int:
-        return expand_width(self.raw, tab)
+        return text_width(self.raw, tab)
 
     def trailing_comment(self) -> Token | None:
         """Comment token on this line that is not the line's only token."""
@@ -50,6 +50,7 @@ class Line:
 
 
 def expand_width(text: str, tab: int = 8) -> int:
+    """Visual width of a leading-whitespace run."""
     w = 0
     for ch in text:
         if ch == "\t":
@@ -58,6 +59,17 @@ def expand_width(text: str, tab: int = 8) -> int:
             w += 1
         else:
             break
+    return w
+
+
+def text_width(text: str, tab: int = 8) -> int:
+    """Visual width of a full row: tabs advance to the next tab stop."""
+    w = 0
+    for ch in text:
+        if ch == "\t":
+            w += tab - (w % tab) if tab else w + 1
+        else:
+            w += 1
     return w
 
 
@@ -73,6 +85,7 @@ class Document:
     depths: list[tuple[int, int]]  # (bracket depth before line, depth after line)
     paren_depth: list[int]         # non-bracket nesting at line start
     parse_error: str | None = None
+    _tdepths: list | None = field(default=None, repr=False)
 
     @property
     def is_python(self) -> bool:
@@ -94,6 +107,28 @@ class Document:
 
     def rows_with_token(self, tok: Token) -> range:
         return range(tok.row, tok.end_row + 1)
+
+    def token_depths(self) -> list[tuple[int, int]]:
+        """``(brace depth, paren depth)`` in front of each token, cached on first use."""
+        if self._tdepths is None:
+            out = []
+            braces = 0
+            parens = 0
+            for t in self.tokens:
+                out.append((braces, parens))
+                if t.kind in (CMT, STR, PRE):
+                    continue
+                if t.kind == PUNCT:
+                    if t.text == "{":
+                        braces += 1
+                    elif t.text == "}":
+                        braces = max(0, braces - 1)
+                    elif t.text in ("(", "["):
+                        parens += 1
+                    elif t.text in (")", "]"):
+                        parens = max(0, parens - 1)
+            self._tdepths = out
+        return self._tdepths
 
 
 def normalize(src: str) -> tuple[str, str]:
@@ -157,13 +192,13 @@ _CLOSES = {v: k for k, v in _OPENS.items()}
 
 
 def _depth_scan(rows: list[Line], spec: Spec) -> tuple[list[tuple[int, int]], list[int]]:
-    """Per-row bracket depth: used for indentation in clike, for continuation in both."""
+    """Per-row brace depth (for clike indent) and open ``(`/``[`` count (for continuation rows)."""
     depths: list[tuple[int, int]] = []
     parens: list[int] = []
     stack: list[str] = []
     for row in rows:
-        before = len(stack)
-        non_bracket = sum(1 for ch in stack if ch != "{")
+        braces_before = sum(1 for ch in stack if ch == "}")
+        parens_before = sum(1 for ch in stack if ch in (")", "]"))
         for t in row.tokens:
             if t.kind in (CMT, STR, PRE):
                 continue
@@ -173,8 +208,8 @@ def _depth_scan(rows: list[Line], spec: Spec) -> tuple[list[tuple[int, int]], li
                 elif t.text in _CLOSES:
                     if stack and stack[-1] == t.text:
                         stack.pop()
-        depths.append((before, len(stack)))
-        parens.append(non_bracket)
+        depths.append((braces_before, sum(1 for ch in stack if ch == "}")))
+        parens.append(parens_before)
     return depths, parens
 
 
