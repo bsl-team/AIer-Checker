@@ -68,7 +68,6 @@ def _python_roles(doc: Document) -> dict[str, list[tuple[int, str]]]:
 def _match(toks: list, open_idx: int) -> int | None:
     """Index of the bracket matching the opener at ``open_idx``."""
     pairs = {"(": ")", "[": "]", "{": "}"}
-    closers = {v: k for k, v in pairs.items()}
     want = pairs.get(toks[open_idx].text)
     if want is None:
         return None
@@ -83,10 +82,6 @@ def _match(toks: list, open_idx: int) -> int | None:
                 if depth == 0:
                     return j
     return None
-
-
-def _code(row) -> list:
-    return [t for t in row.tokens if t.kind != CMT]
 
 
 def _prev(toks, i, back=1):

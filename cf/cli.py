@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import codecs
+import glob
 import json
 import os
 import sys
@@ -71,6 +72,23 @@ def write_source(path: str, text: str, encoding: str) -> None:
         raise InputError(f"cannot write {path}: {exc.strerror or exc}") from exc
 
 
+def expand_paths(paths: list[str]) -> list[str]:
+    """Expand globs: cmd.exe and PowerShell do not expand ``src\\*.cpp`` for us."""
+    out: list[str] = []
+    for pattern in paths:
+        if pattern == "-":
+            out.append(pattern)
+            continue
+        if any(ch in pattern for ch in "*?["):
+            matches = sorted(glob.glob(pattern, recursive=True))
+            if not matches:
+                raise InputError(f"no files match {pattern!r}")
+            out.extend(matches)
+        else:
+            out.append(pattern)
+    return out
+
+
 def load_inputs(paths: list[str], lang: str | None = None) -> tuple[list, list[tuple[str, str]]]:
     """Return (documents, [(path, encoding)]).  No paths, or ``-``, reads stdin."""
     spec = None
@@ -78,6 +96,7 @@ def load_inputs(paths: list[str], lang: str | None = None) -> tuple[list, list[t
         if lang not in SPEC_BY_NAME:
             raise InputError(f"unknown language {lang!r}; try --lang with one of {', '.join(sorted(SPEC_BY_NAME))}")
         spec = SPEC_BY_NAME[lang]
+    paths = expand_paths(list(paths or []))
     if not paths or paths == ["-"]:
         raw = sys.stdin.buffer.read()
         text, enc = decode_bytes(raw)

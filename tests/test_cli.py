@@ -259,6 +259,18 @@ def test_store_is_created_on_demand(capsys, tmp_path):
     assert os.path.exists(nested)
 
 
+def test_glob_patterns_are_expanded_by_the_kernel(capsys, tmp_path):
+    for name in ("a.c", "b.c"):
+        (tmp_path / name).write_text("int main(void) {\n    return 0;\n}\n", encoding="utf-8")
+    pattern = str(tmp_path / "*.c").replace("\\", "/")
+    code, out, err = run(capsys, ["extract", pattern, "--json"])
+    assert code == 0, err
+    data = json.loads(out)
+    assert len(data["samples"]) == 2
+    code, _out, err = run(capsys, ["extract", str(tmp_path / "*.nope")])
+    assert code == 2 and "no files match" in err
+
+
 def test_check_can_use_a_profile_file(capsys, tmp_path):
     _code, out, _ = run(capsys, ["extract", sample_path("cpp_allman.cpp"), "--json"])
     prof = tmp_path / "allman.json"
