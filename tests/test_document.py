@@ -64,8 +64,9 @@ def test_line_continuation_in_python_string():
     doc = build_document(src, "y.py")
     assert doc.row(2).in_trivia is False
     assert doc.row(1).tokens[-1].text == '"a"'
-    assert doc.depths[0][1] == 1 and doc.depths[1][0] == 1  # open paren carried to row 2
-    assert doc.paren_depth[1] == 1
+    # depths only tracks braces; the open paren is visible through paren_depth
+    assert doc.depths[0][1] == 0 and doc.depths[1][0] == 0
+    assert doc.paren_depth[0] == 0 and doc.paren_depth[1] == 1
 
 
 def test_python_multiline_string_body_rows():
