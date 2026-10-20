@@ -232,3 +232,33 @@ def test_defaults_fill_unobserved_features():
     assert prof.confidence("indent.size") == 0.0
     assert eff["indent.size"][0] == 4
     assert eff["indent.size"][2] is False  # not observed, family default
+
+
+def test_template_angle_spacing_is_measured_separately_from_comparisons():
+    src = (
+        "int main() {\n"
+        "    vector<int> tight;\n"
+        "    vector <int> spaced;\n"
+        "    for (int i = 0; i < n; i++) if (a < b) tight = a;\n"
+        "}\n"
+    )
+    prof = extract(build_document(src, "t.cpp"))
+    before = prof.feature("space.before_template_angle")
+    assert before is not None and before.total == 2  # the two declarations only
+    assert prof.value("space.inside_template_angle") is False
+    # the `i < n` and `a < b` comparisons are operator spacing, not a template
+    assert prof.feature("space.around_operators") is not None
+
+
+def test_template_angle_recognition_rejects_comparison_shapes():
+    src = "int main(){ if(a<b&&c<=d) x = n >> 2; vector<int> v; vector<vector<int>> w; }\n"
+    doc = build_document(src, "r.cpp")
+    angles = doc.template_angles()
+    texts = {doc.tokens[i].text for i in angles}
+    assert texts == {"<"}  # only template openers, never the comparison or shift operators
+    assert len(angles) == 3  # vector<, plus the outer and inner of vector<vector<int>>
+
+
+def test_knr_sample_uses_tight_template_angles(knr):
+    assert knr.value("space.before_template_angle") is False
+    assert knr.value("space.inside_template_angle") is False

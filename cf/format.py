@@ -22,7 +22,8 @@ FORMAT_RULES = (
     "brace.style", "brace.close_same_row_branch", "brace.empty_block",
     "space.after_keyword", "space.around_operators", "space.around_assignment",
     "space.after_comma", "space.before_comma", "space.inside_parens", "space.inside_brackets",
-    "space.inside_braces", "space.before_call_paren", "space.before_semicolon",
+    "space.inside_braces", "space.before_call_paren", "space.before_template_angle",
+    "space.inside_template_angle", "space.before_semicolon",
     "space.after_semicolon", "space.around_colon_in_for", "space.around_pointer",
     "blank.max_in_block", "blank.between_functions", "blank.between_methods",
     "blank.after_open_brace", "blank.before_close_brace", "blank.file_start", "blank.file_end",
@@ -431,6 +432,12 @@ class Formatter:
             return self._spaced("space.after_semicolon", True)
         if prev.kind == ID and tok.is_punct("("):
             return self._spaced("space.before_call_paren", False)
+        if self.doc.is_template_angle(tok.index):
+            if tok.is_punct("<"):
+                return self._spaced("space.before_template_angle", False)  # vector<int> vs vector <int>
+            return self._spaced("space.inside_template_angle", False)  # the closing > / >>
+        if prev.is_punct("<") and self.doc.is_template_angle(prev.index):
+            return self._spaced("space.inside_template_angle", False)  # token right after <
         pointer = self._pointer_gap(cells, idx)
         if pointer is not None:
             return pointer

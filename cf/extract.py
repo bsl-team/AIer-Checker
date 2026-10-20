@@ -220,9 +220,10 @@ class Extractor:
                         self.rec("space.around_colon_in_for", colon_style(t, nx), t.row)
             if t.kind == PUNCT and t.text in ("*", "&", "&&"):
                 self._pointer(toks, i)
+            if self._is_angle(self.doc, i, t):
+                self._template_angle(toks, i)
+                continue  # a template < / >, not a comparison, so not operator spacing
             if t.kind == PUNCT and (t.text in BIN_OPS or t.text in ASSIGN_OPS):
-                if t.text in ("<", ">") and t.gap == 0 and nx.gap == 0:
-                    continue  # template angles such as vector<int>, not a comparison
                 if t.text == "**":
                     continue  # exponent / **kwargs / **pointer: spacing depends on the operands
                 if left and right and self._is_binary(toks, i):
@@ -230,6 +231,21 @@ class Extractor:
                         continue  # f(timeout=30) and a[1:2]=x are not assignment-layout decisions
                     key = "space.around_assignment" if t.text in ASSIGN_OPS else "space.around_operators"
                     self.rec(key, t.gap > 0 and nx.gap > 0, t.row)
+
+    @staticmethod
+    def _is_angle(doc: Document, i: int, t: Token) -> bool:
+        return t.kind == PUNCT and t.text in ("<", ">", ">>") and doc.is_template_angle(i)
+
+    def _template_angle(self, toks, i) -> None:
+        t = toks[i]
+        if t.text == "<":
+            self.rec("space.before_template_angle", t.gap > 0, t.row)
+            nx = toks[i + 1] if i + 1 < len(toks) else None
+            if nx is not None and nx.row == t.end_row and nx.text != ">" and nx.text != ">>":
+                self.rec("space.inside_template_angle", nx.gap > 0, t.row)
+        else:  # the closing > (or >>) : space just before it
+            if t.gap >= 0:
+                self.rec("space.inside_template_angle", t.gap > 0, t.row)
 
     def _pointer(self, toks, i) -> None:
         t = toks[i]

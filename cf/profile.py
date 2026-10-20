@@ -26,6 +26,8 @@ FEATURE_SPECS: dict[str, tuple[str, str, Any, Any]] = {
     "space.inside_brackets": ("bool", "space just inside [ ]", False, False),
     "space.inside_braces": ("bool", "space just inside { } in literals", False, False),
     "space.before_call_paren": ("bool", "space before a call's (", False, False),
+    "space.before_template_angle": ("bool", "space before a template's <", False, False),
+    "space.inside_template_angle": ("bool", "space just inside a template's < >", False, False),
     "space.before_semicolon": ("bool", "space before ; inside for(...)", False, False),
     "space.after_semicolon": ("bool", "space after ; inside for(...)", True, True),
     "space.around_colon_in_for": ("str", "spacing around a meaningful colon", "spaced", "after"),

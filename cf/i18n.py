@@ -216,6 +216,8 @@ _RULE_LABELS: dict[str, tuple[str, str]] = {
     "space.inside_brackets": ("space just inside [ ]", "方括号内侧空格"),
     "space.inside_braces": ("space just inside { } in literals", "字面量花括号内侧空格"),
     "space.before_call_paren": ("space before a call's (", "调用括号前空格"),
+    "space.before_template_angle": ("space before a template's <", "模板左尖括号 < 前的空格"),
+    "space.inside_template_angle": ("space just inside a template's < >", "模板尖括号 < > 内侧空格"),
     "space.before_semicolon": ("space before ; inside for(...)", "for(...) 内分号前空格"),
     "space.after_semicolon": ("space after ; inside for(...)", "for(...) 内分号后空格"),
     "space.around_colon_in_for": ("spacing around a meaningful colon", "有意义冒号的前后空格"),

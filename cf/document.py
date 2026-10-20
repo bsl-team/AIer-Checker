@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from .tokens import CMT, PRE, PUNCT, STR, Spec, Token, detect, tokenize_clike
+from .tokens import CMT, ID, KW, NUM, PRE, PUNCT, STR, Spec, Token, detect, tokenize_clike
 
 
 @dataclass
@@ -88,6 +88,8 @@ class Document:
     paren_depth: list[int]         # non-bracket nesting at line start
     parse_error: str | None = None
     _tdepths: list | None = field(default=None, repr=False)
+    _angles: dict | None = field(default=None, repr=False)
+    _angle_set: set | None = field(default=None, repr=False)
 
     @property
     def is_python(self) -> bool:
@@ -132,6 +134,80 @@ class Document:
                         brackets = max(0, brackets - 1)
             self._tdepths = out
         return self._tdepths
+
+    def template_angles(self) -> dict[int, int]:
+        """Map each template ``<`` to the token index that closes it, cached on first use.
+
+        ``<``/``>`` double as the comparison operators, so an angle only counts as a template
+        when its contents can *only* be a type argument list: identifiers, keywords, numbers and
+        the separators ``, : * & [ ] ( )``, with every nested ``<`` matched before anything that
+        would end an expression.  A ``>>`` closes two levels at once.  This lets the spacing and
+        operator rules tell ``vector<int>`` (spacing belongs to the angle) from ``i < n`` (a
+        comparison) instead of relying on how tightly the tokens happen to sit.
+        """
+        if self._angles is None:
+            self._angles = _scan_template_angles(self.tokens)
+        return self._angles
+
+    def is_template_angle(self, index: int) -> bool:
+        """True when the token at ``index`` is a ``<`` or ``>`` that opens/closes a template."""
+        if self._angle_set is None:
+            angles = self.template_angles()
+            self._angle_set = set(angles) | set(angles.values())
+        return index in self._angle_set
+
+
+def _scan_template_angles(tokens: list[Token]) -> dict[int, int]:
+    if not tokens:
+        return {}
+    openers: dict[int, int] = {}
+    for i, t in enumerate(tokens):
+        if t.kind != PUNCT or t.text != "<":
+            continue
+        prev = tokens[i - 1] if i else None
+        if prev is None or prev.row != t.row:
+            continue
+        if prev.kind not in (ID, KW):
+            continue
+        close = _match_angle(tokens, i)
+        if close is None:
+            continue
+        openers[i] = close
+    return openers
+
+
+_ANGLE_INTERIOR = {",", "::", "*", "&", "[", "]", "(", ")"}
+
+
+def _match_angle(tokens: list[Token], open_idx: int) -> int | None:
+    """Walk forward from a ``<``; return the index that balances it, or None if it is not a type list."""
+    depth = 0
+    for j in range(open_idx, len(tokens)):
+        t = tokens[j]
+        if t.kind in (CMT, STR, PRE):
+            return None
+        if t.kind == PUNCT:
+            text = t.text
+            if text == "<":
+                depth += 1
+                continue
+            if text == ">":
+                depth -= 1
+                if depth == 0:
+                    return j
+                continue
+            if text == ">>":
+                depth -= 2
+                if depth <= 0:
+                    return j
+                continue
+            if text in _ANGLE_INTERIOR:
+                continue
+            return None  # = ; { } + - operators etc: this is an expression, not a type list
+        if t.kind in (ID, KW, NUM):
+            continue
+        return None
+    return None
 
 
 def normalize(src: str) -> tuple[str, str]:

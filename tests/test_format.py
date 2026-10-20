@@ -353,3 +353,29 @@ def test_python_dedent_to_module_level_is_exact():
     out = fmt(src, "d.py", prof)
     assert out == src
     assert stream(out, "d.py") == stream(src, "d.py")
+
+
+def test_tight_template_profile_normalizes_spaced_angles():
+    profile = profile_of(**{"space.before_template_angle": False, "space.inside_template_angle": False})
+    src = "int main(){\n    vector <int> a;\n    map < string, int > m;\n}\n"
+    out = fmt(src, "t.cpp", profile)
+    assert "vector<int> a;" in out
+    assert "map<string, int>" in out
+    assert token_identity(src, "t.cpp") == token_identity(out, "t.cpp")
+
+
+def test_spaced_template_profile_normalizes_tight_angles():
+    profile = profile_of(**{"space.before_template_angle": True})
+    src = "int main(){\n    vector<int> a;\n}\n"
+    out = fmt(src, "t.cpp", profile)
+    assert "vector <int> a;" in out
+    assert token_identity(src, "t.cpp") == token_identity(out, "t.cpp")
+
+
+def test_comparisons_are_never_respaced_as_template_angles():
+    # the profile says tight templates, but a < b is a comparison, not an angle
+    profile = profile_of(**{"space.before_template_angle": False, "space.around_operators": True})
+    src = "int main(){\n    if(a<b) x = n >> 2;\n}\n"
+    out = fmt(src, "t.cpp", profile)
+    assert "a<b" in out          # left as authored: not a template
+    assert token_identity(src, "t.cpp") == token_identity(out, "t.cpp")
