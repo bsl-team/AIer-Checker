@@ -62,6 +62,7 @@ CONTENT_DRIVEN = {
     "layout.wrap_operator",
     "naming.member",
     "naming.variable",
+    "constant.marker",  # an author may mark some constants const and others #define on purpose
 }
 
 STRICT_SEVERITY = {

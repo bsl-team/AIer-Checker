@@ -188,6 +188,8 @@ _MESSAGES: list[tuple[str, str, str]] = [
      "跨行移动语句不是纯排版改动"),
     ("w.comment.*", "comment text is never rewritten", "注释内容一律不改"),
     ("w.include.*", "reordering includes can change build behaviour", "调整 include/import 顺序可能影响构建"),
+    ("w.constant.*", "adding, removing or moving const changes the program, not its layout",
+     "增删或移动 const 会改变程序本身，不属于排版"),
     ("h.name", "profile user name", "档案用户名"),
     ("h.new_name", "new profile user name", "新的档案用户名"),
     ("h.profile_file", "profile JSON file to import", "要导入的档案 JSON 文件"),
@@ -237,6 +239,8 @@ _RULE_LABELS: dict[str, tuple[str, str]] = {
     "comment.block_ratio": ("percent of comments that are block comments", "块注释占比"),
     "quote.style": ("preferred string quote", "偏好字符串引号"),
     "semicolon.required": ("statements end with ;", "语句以分号结束"),
+    "constant.marker": ("how constants are marked", "常量标记方式"),
+    "constant.placement": ("const sits before or after the type", "const 与类型的先后"),
     "layout.case_indent": ("case labels inside switch", "switch 内 case 标签缩进"),
     "layout.wrap_operator": ("operator position when a row wraps", "折行时运算符的位置"),
     "layout.args_per_row": ("argument layout in wrapped lists", "折行参数列表的排布"),
@@ -323,6 +327,7 @@ def translate_value(value, kind: str | None = None) -> str:
         "single": "单引号", "double": "双引号", "backtick": "反引号",
         "none": "无", "docstring": "文档字符串", "doxygen": "Doxygen", "triple-slash": "三斜杠",
         "none (severity)": "无",
+        "before-type": "类型名前", "after-type": "类型名后", "define": "#define", "enum": "枚举",
     }
     if locale != "zh":
         return text

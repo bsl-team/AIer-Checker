@@ -109,3 +109,23 @@ def test_severity_helper_prefers_strict_rules():
     assert severity_for("indent.type", 0.96, "intra-file") == "high"
     assert severity_for("space.inside_parens", 0.95, "intra-file") == "low"
     assert severity_for("quote.style", 0.8, "against-profile") == "high"
+
+
+def test_mixed_const_placement_is_reported_within_a_file():
+    src = "int main(){\n    const int a=1;\n    int const b=2;\n    const int c=3;\n}\n"
+    rep = analyze([build_document(src, "p.cpp")], min_evidence=1)
+    hits = findings(rep, "constant.placement")
+    assert hits and hits[0].severity == "low"
+    assert hits[0].rows == [3]  # the lone after-type row deviates
+
+
+def test_marker_choice_is_content_driven_and_demoted():
+    assert severity_for("constant.marker", 0.5, "intra-file") == "low"
+
+
+def test_const_placement_against_a_profile():
+    profile = extract(build_document("int main(){ const int a=1; const int b=2; const int c=3; }\n", "pr.cpp"))
+    file_src = "int main(){ int const a=1; int const b=2; }\n"
+    rep = analyze([build_document(file_src, "f.cpp")], baseline=profile, min_evidence=1)
+    hits = findings(rep, "constant.placement", kind="against-profile")
+    assert hits and "before-type" in hits[0].message

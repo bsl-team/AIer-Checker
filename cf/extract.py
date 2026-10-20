@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import math
+import re
 from collections import Counter
 from dataclasses import dataclass, field
 
@@ -66,6 +67,7 @@ class Extractor:
         self._naming()
         self._imports()
         self._semicolons()
+        self._constants()
         self.p.samples = [
             Sample(
                 path=self.doc.path,
@@ -547,6 +549,78 @@ class Extractor:
             elif last.kind in (ID, NUM, STR, CHR) or last.is_punct(")", "]"):
                 if self.doc.paren_depth[r.num - 1] == 0 and not any(t.is_punct("{") for t in rtoks):
                     self.rec("semicolon.required", False, r.num)
+
+    # -- how constants are marked ------------------------------------------
+    CONST_MARKER_KW = ("const", "constexpr")
+    SCALAR_TYPE_KW = {
+        "void", "char", "short", "int", "long", "float", "double", "bool", "signed", "unsigned",
+        "wchar_t", "char8_t", "char16_t", "char32_t", "int8_t", "int16_t", "int32_t", "int64_t",
+        "uint8_t", "uint16_t", "uint32_t", "uint64_t", "size_t", "byte", "auto",
+    }
+    DEFINE_RE = re.compile(r"^#\s*define\s+([A-Za-z_]\w*)\s+(\S.*)$")
+    LITERAL_RE = re.compile(r'^"[^"]*"$|\'[^\']*\'$|[+-]?[\w.]+$')
+
+    def _constants(self) -> None:
+        if self.doc.spec.family == "python":
+            return  # python marks constants by naming (see naming.constant), not by keyword
+        toks = self.doc.tokens
+        for i, t in enumerate(toks):
+            if t.kind == KW and t.text in self.CONST_MARKER_KW:
+                placement = self._const_placement(toks, i)
+                if placement:
+                    self.rec("constant.marker", t.text, t.row)
+                    self.rec("constant.placement", placement, t.row)
+            elif t.kind == KW and t.text == "enum":
+                self._enum_constants(toks, i)
+            elif t.kind == PRE:
+                self._define_constant(t)
+
+    def _const_placement(self, toks, i) -> str | None:
+        """``before-type`` for ``const int x``, ``after-type`` for ``int const x``; None if not a declaration."""
+        t = toks[i]
+        prev = toks[i - 1] if i else None
+        nxt = toks[i + 1] if i + 1 < len(toks) else None
+        if prev is None or prev.row != t.row:
+            return "before-type"  # the declaration opens its row: const int x
+        if prev.text == "operator":
+            return None
+        # after-type: a real type sits before const and a name after it (int const x, Foo const v,
+        # vector<int> const v).  ``*``/``&`` before const qualify the pointer, not the type, so skip.
+        prev_is_type = (
+            prev.kind == ID
+            or (prev.kind == KW and prev.text in self.SCALAR_TYPE_KW)
+            or prev.text in (">", "::")
+        )
+        nxt_is_name = nxt is not None and (nxt.kind == ID or nxt.is_punct("*", "&"))
+        if prev_is_type and nxt_is_name:
+            return "after-type"
+        nxt_is_type = nxt is not None and (
+            nxt.kind == ID or (nxt.kind == KW and nxt.text in self.SCALAR_TYPE_KW)
+        )
+        if nxt_is_type:
+            return "before-type"
+        return None  # a trailing const on a method, a cast, a lambda capture: not a placement choice
+
+    def _enum_constants(self, toks, i) -> None:
+        """Count names introduced by an anonymous ``enum { A, B }`` as constants."""
+        nxt = toks[i + 1] if i + 1 < len(toks) else None
+        if nxt is None or nxt.kind == KW and nxt.text == "class":
+            return  # enum class is a scoped type, not a group of constants
+        if not nxt.is_punct("{") or nxt.row != toks[i].row:
+            return  # a tagged enum (a type) or a multi-line body
+        j = i + 2
+        while j < len(toks) and not toks[j].is_punct("}"):
+            if toks[j].kind == ID:
+                self.rec("constant.marker", "enum", toks[j].row)
+            j += 1
+
+    def _define_constant(self, tok) -> None:
+        """An object-like ``#define NAME <literal>`` is a named constant; function-like ones are not."""
+        match = self.DEFINE_RE.match(tok.text.strip())
+        if not match:
+            return
+        if self.LITERAL_RE.match(match.group(2).strip()):
+            self.rec("constant.marker", "define", tok.row)
 
 
 def _indent_unit(pairs: list[tuple[int, int]]) -> int:

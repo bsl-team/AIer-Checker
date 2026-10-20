@@ -38,6 +38,7 @@ NOT_REWRITTEN = {
     "layout.single_statement_same_row": "moving statements across rows is not a layout-only edit",
     "comment.*": "comment text is never rewritten",
     "include.*": "reordering includes can change build behaviour",
+    "constant.*": "adding, removing or moving const changes the program, not its layout",
 }
 
 ACCESS_KW = {"public", "private", "protected"}

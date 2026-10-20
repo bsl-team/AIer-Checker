@@ -262,3 +262,38 @@ def test_template_angle_recognition_rejects_comparison_shapes():
 def test_knr_sample_uses_tight_template_angles(knr):
     assert knr.value("space.before_template_angle") is False
     assert knr.value("space.inside_template_angle") is False
+
+
+def test_constants_are_marked_by_keyword_macro_or_enum():
+    src = (
+        "#define N 5\n"
+        "#define SQ(x) ((x)*(x))\n"
+        "enum { A = 1, B = 2 };\n"
+        "const int a = 1;\n"
+        "constexpr int b = 2;\n"
+        "int main(){ return a + b + N + A + B + SQ(2); }\n"
+    )
+    prof = extract(build_document(src, "t.cpp"))
+    marker = prof.feature("constant.marker")
+    assert marker.counts["const"] == 1
+    assert marker.counts["constexpr"] == 1
+    assert marker.counts["define"] == 1  # only the object-like #define, not SQ(x)
+    assert marker.counts["enum"] == 2  # A and B
+    assert "SQ" not in marker.rows.get("define", [])
+
+
+def test_plain_variables_are_not_constant_evidence():
+    prof = extract(build_document("int a = 5;\nint b = 6;\nint main(){return a+b;}\n", "t.cpp"))
+    assert prof.feature("constant.marker") is None  # no const / #define / enum at all
+
+
+def test_const_placement_before_and_after_type():
+    before = extract(build_document("const int a=1;\nconst char* s;\nint main(){return 0;}\n", "b.cpp"))
+    assert before.value("constant.placement") == "before-type"
+    after = extract(build_document("int const a=1;\nMyClass const& m;\nint main(){return 0;}\n", "a.cpp"))
+    assert after.value("constant.placement") == "after-type"
+
+
+def test_trailing_member_const_is_not_a_placement_signal():
+    prof = extract(build_document("struct S { int f() const; void g() const; };\n", "s.cpp"))
+    assert prof.feature("constant.placement") is None
