@@ -393,3 +393,22 @@ def test_java_methods_and_js_functions_get_names():
     assert roles(java)["function"] == []
     js = build_document("function doThing(a){ return a; }\nfunction other_fn(){ return 1; }\n", "a.js")
     assert [n for _r, n in roles(js)["function"]] == ["doThing", "other_fn"]
+
+
+def test_parameter_list_splits_type_and_name_correctly():
+    src = (
+        "struct Draw { int x; };\n"
+        "bool cmp(Draw x, Draw y) { return x.x < y.x; }\n"
+        "void go(vector<int> c, map<string, int> m) { }\n"
+        "int main() { return 0; }\n"
+    )
+    r = roles(build_document(src, "t.cpp"))
+    params = [n for _row, n in r["parameter"]]
+    assert params == ["x", "y", "c", "m"], params      # the names, including template-typed ones
+    vars_ = [n for _row, n in r["variable"]]
+    assert "Draw" not in vars_ and "vector" not in vars_  # the parameter's type is not a variable
+
+
+def test_user_type_before_a_name_declares_the_name_not_the_type():
+    r = roles(build_document("Node node;\nint total = 0;\nint main(){ return node.total; }\n", "t.cpp"))
+    assert [n for _row, n in r["variable"]] == ["node", "total"]

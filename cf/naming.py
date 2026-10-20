@@ -144,6 +144,14 @@ def _clike_roles(doc: Document) -> dict[str, list[tuple[int, str]]]:
         if _in_range(i, typedef_ranges):
             add("type", t.row, t.text)
             continue
+        if _is_arg_position(doc, i, body_ranges):
+            # checked before the declaration pass: in ``bool cmp(Draw x, Draw y)`` the name is the
+            # parameter and ``Draw`` is only its type, so letting _is_decl_name claim ``x`` first
+            # used to file the parameter as a local variable
+            add("parameter", t.row, t.text)
+            continue
+        if _in_param_list(i, body_ranges) and nx.row == t.row and nx.kind in (ID, KW):
+            continue  # the type of the parameter that follows it, not a name of its own
         if _is_decl_name(toks, i):
             specs = _declaration_specifiers(toks, i)
             if _in_range(i, struct_ranges) and specs.isdisjoint(CONST_KW):
@@ -153,8 +161,6 @@ def _clike_roles(doc: Document) -> dict[str, list[tuple[int, str]]]:
             elif specs or nx.is_punct("="):
                 add("variable", t.row, t.text)
             continue
-        if _is_arg_position(doc, i, body_ranges):
-            add("parameter", t.row, t.text)
     # clike declarations carry no keyword, so a definition is recognised by its parameter
     # list followed by a body; ``main`` is fixed by the language and says nothing about the author
     for _open, _close, name_idx in _definitions(doc):
@@ -276,6 +282,10 @@ def _in_range(i: int, ranges: list[tuple[int, int]]) -> bool:
     return any(lo < i < hi for lo, hi in ranges)
 
 
+def _in_param_list(i: int, body_ranges) -> bool:
+    return any(lo < i < hi for lo, hi in body_ranges)
+
+
 def _is_arg_position(doc, i, body_ranges) -> bool:
     toks = doc.tokens
     for lo, hi in body_ranges:
@@ -284,11 +294,15 @@ def _is_arg_position(doc, i, body_ranges) -> bool:
             if t.kind != ID:
                 return False
             pr = _prev(toks, i)
-            if pr is not None and pr.kind == PUNCT and pr.text in (".", "::", "<", ">"):
-                return False
+            if pr is not None and pr.kind == PUNCT and pr.text in (".", "::", "<"):
+                return False  # a member, a qualified name, or a template argument, not a declarator
+            # a name after the closing ``>`` of ``vector<int> m`` *is* the declarator, so ``>``
+            # must not be excluded here
             nx = toks[i + 1] if i + 1 < len(toks) else None
             if nx is not None and nx.is_punct("("):
                 return False
+            if nx is not None and nx.row == t.row and nx.kind in (ID, KW) and not nx.is_punct():
+                return False  # ``Draw x``: this token is the parameter's type, not its name
             return True
     return False
 
