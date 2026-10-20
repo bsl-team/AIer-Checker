@@ -192,8 +192,12 @@ def detect(path: str | None, src: str) -> Spec:
         base = re.split(r"[/\\]", path)[-1].lower()
         if base in ("makefile", "dockerfile"):
             return SPEC_BY_NAME["shell"]
-    head = src[:4000]
-    if re.search(r"^\s*(from\s+\S+\s+import|def\s+\w+\s*\(|class\s+\w+[\s(:]|import\s+\w+$)", head, re.M):
+    head = src[:8000]
+    # ``class Foo {`` is C++/Java, not Python: a Python class header always ends in ``:``,
+    # optionally after a base list, so require that instead of any separator.
+    if re.match(r"^#!.*\bpython\b", src) or re.search(
+        r"^\s*(from\s+\S+\s+import|def\s+\w+\s*\(|class\s+\w+\s*[:(]|import\s+\w+$)", head, re.M
+    ):
         return PYTHON
     if re.search(r"^\s*#include\s*[<\"]", head, re.M):
         return SPEC_BY_NAME["cpp"] if re.search(r"\b(std::|template\s*<|class\s+\w+|new\s+\w+)", head) else SPEC_BY_NAME["c"]

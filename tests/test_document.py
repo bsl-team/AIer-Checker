@@ -123,3 +123,25 @@ def test_jsx_free_js_template_literal_with_braces():
 def test_token_stream_roundtrips_multiline_tokens():
     doc = build_document("/* x\ny */ int z;\n", "a.c", SPEC_BY_NAME["c"])
     assert doc.token_stream()[0][1] == "/* x\ny */"
+
+
+def test_cpp_class_header_is_not_mistaken_for_python_without_an_extension():
+    # `class Solver {` used to satisfy the loose python pattern and win before the #include test
+    cxx = "#include <cstdio>\n\nclass Solver {\npublic:\n    int go() { return 1; }\n};\n"
+    assert detect(None, cxx).name in ("cpp", "c")
+    assert detect(None, "class Solver {\n};\n").name != "python"
+
+
+def test_python_class_needs_a_colon_or_base_list():
+    assert detect(None, "class Config:\n    pass\n").name == "python"
+    assert detect(None, "class Config(Base, Mixin):\n    pass\n").name == "python"
+
+
+def test_python_shebang_is_enough_without_an_extension():
+    assert detect(None, "#!/usr/bin/env python3\nimport sys\n").name == "python"
+    assert detect(None, "#!/usr/bin/python\nprint(1)\n").name == "python"
+
+
+def test_long_license_header_does_not_push_python_past_the_head_window():
+    header = "".join(f"# copyright line {i}\n" for i in range(120))
+    assert detect(None, header + "\ndef main():\n    pass\n").name == "python"
