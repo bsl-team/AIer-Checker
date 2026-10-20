@@ -10,6 +10,8 @@ TYPE_KW = {"class", "struct", "enum", "union", "interface", "trait", "impl", "re
 CONST_KW = {"const", "constexpr", "final", "readonly", "static", "volatile"}
 # conventions a bare lowercase word is compatible with (it cannot tell them apart)
 LOWERCASE_FAMILY = ("snake_case", "camelCase")
+# names the language or runtime mandates, so they are not the author's choice
+ENTRY_POINT_NAMES = {"main", "winmain", "wmain", "wWinMain", "DllMain"}
 TYPE_INTRO_KW = TYPE_KW | {
     "type", "typedef", "namespace", "module", "package", "using", "func", "fn", "def", "new"
 }
@@ -153,6 +155,13 @@ def _clike_roles(doc: Document) -> dict[str, list[tuple[int, str]]]:
             continue
         if _is_arg_position(doc, i, body_ranges):
             add("parameter", t.row, t.text)
+    # clike declarations carry no keyword, so a definition is recognised by its parameter
+    # list followed by a body; ``main`` is fixed by the language and says nothing about the author
+    for _open, _close, name_idx in _definitions(doc):
+        name = toks[name_idx]
+        if name.text in ENTRY_POINT_NAMES:
+            continue
+        add("method" if _in_range(name_idx, struct_ranges) else "function", name.row, name.text)
     if doc.spec.name in ("go", "rust", "python"):
         _keyword_decl_roles(doc, out, add)
     return out
@@ -206,7 +215,12 @@ def _is_decl_name(toks, i) -> bool:
 
 def _definition_ranges(doc: Document) -> list[tuple[int, int]]:
     """Token index ranges of parameter lists that belong to a function definition."""
-    ranges: list[tuple[int, int]] = []
+    return [(lo, hi) for lo, hi, _name in _definitions(doc)]
+
+
+def _definitions(doc: Document) -> list[tuple[int, int, int]]:
+    """``(open, close, name)`` token indices for every parameter list that opens a definition body."""
+    ranges: list[tuple[int, int, int]] = []
     toks = doc.tokens
     for i, t in enumerate(toks):
         if not t.is_punct("(") or t.gap != 0:
@@ -218,9 +232,11 @@ def _definition_ranges(doc: Document) -> list[tuple[int, int]]:
             continue
         if pr.kind not in (ID, KW):
             continue
+        if pr.row != t.row:
+            continue
         close = _match(toks, i)
         if close is not None and _after_brace(toks, close):
-            ranges.append((i, close))
+            ranges.append((i, close, pr.index))
     return ranges
 
 

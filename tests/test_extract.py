@@ -4,7 +4,7 @@ import pytest
 
 from cf.document import build_document
 from cf.extract import extract, extract_all
-from cf.naming import classify
+from cf.naming import classify, roles
 from cf.profile import Profile
 from cf.tokens import Token
 from tests.util import read_sample, sample_path
@@ -355,3 +355,41 @@ def test_comma_join_chained_operands_each_count():
     prof = extract(build_document("int main(){ a(),b(),c(); }\n", "c.cpp"))
     feat = prof.feature("statement.comma_join")
     assert feat.counts["true"] == 2  # a-b and b-c both joined
+
+
+def test_clike_function_and_method_names_are_detected():
+    src = (
+        "int solve_case(int n) { return n; }\n"
+        "void build_graph(int e) { }\n"
+        "struct Point {\n"
+        "    int dist_here() { return 0; }\n"
+        "};\n"
+        "int main() { return solve_case(1); }\n"
+    )
+    doc = build_document(src, "t.cpp")
+    r = roles(doc)
+    assert [n for _row, n in r["function"]] == ["solve_case", "build_graph"]
+    assert [n for _row, n in r["method"]] == ["dist_here"]
+    prof = extract(doc)
+    assert prof.value("naming.function") == "snake_case"
+    assert prof.value("naming.method") == "snake_case"
+
+
+def test_main_and_control_bodies_are_not_function_name_evidence():
+    src = "int main(){\n\tif(x){ y=1; }\n\twhile(a){ b=2; }\n\treturn 0;\n}\n"
+    r = roles(build_document(src, "m.cpp"))
+    assert r["function"] == []          # main is fixed by the language; if/while are not names
+    assert extract(build_document(src, "m.cpp")).feature("naming.function") is None
+
+
+def test_prototypes_without_a_body_are_not_counted():
+    src = "int compute_thing(int x);\nint main(){ return 0; }\n"
+    assert roles(build_document(src, "p.cpp"))["function"] == []
+
+
+def test_java_methods_and_js_functions_get_names():
+    java = build_document("class A {\n void doThing(){}\n int other(){ return 1; }\n}\n", "A.java")
+    assert [n for _r, n in roles(java)["method"]] == ["doThing", "other"]
+    assert roles(java)["function"] == []
+    js = build_document("function doThing(a){ return a; }\nfunction other_fn(){ return 1; }\n", "a.js")
+    assert [n for _r, n in roles(js)["function"]] == ["doThing", "other_fn"]
