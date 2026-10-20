@@ -379,3 +379,26 @@ def test_comparisons_are_never_respaced_as_template_angles():
     out = fmt(src, "t.cpp", profile)
     assert "a<b" in out          # left as authored: not a template
     assert token_identity(src, "t.cpp") == token_identity(out, "t.cpp")
+
+
+def _applied(src, path, profile):
+    from cf.document import build_document
+    return Formatter(build_document(src, path), profile, FormatOptions()).run().applied
+
+
+def test_wrapped_continuation_rows_reach_a_fixed_point_in_one_pass():
+    # the wrapped rows are created during render, after the indent pass, so they must already
+    # carry the indent the next pass would choose, or --write and --check disagree forever
+    src = (
+        "int main(){\n"
+        "\tfor(int j=0;j<n;j++)\n"
+        "\t{\n"
+        "\t\tans=min(ans,(v1[i].x-v2[j].x)*(v1[i].x-v2[j].x)+(v1[i].y-v2[j].y)*(v1[i].y-v2[j].y));\n"
+        "\t}\n"
+        "}\n"
+    )
+    profile = profile_of(**{"indent.type": "tab", "indent.size": 1, "width.limit": 60, "brace.style": "attach"})
+    assert "width.limit" in _applied(src, "t.cpp", profile), "the row should actually wrap"
+    once = fmt(src, "t.cpp", profile)
+    assert "\t\t\tans," in once, once          # the profile's own filler, not a space run
+    assert fmt(once, "t.cpp", profile) == once, "a second pass must not move the continuation rows"

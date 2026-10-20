@@ -616,13 +616,16 @@ class Formatter:
         Re-spacing the opening row shifts the alignment target by a character or two.  Treating
         that as "no longer aligned" would flip the row to a stepped indent and never settle, so
         whichever candidate the row sits closer to wins, and an aligned row is repaired to the
-        exact column.
+        exact column.  When both candidates land on the same column the stepped form wins: it is
+        built from the profile's indent type, so a tab profile keeps tabs instead of being
+        rewritten to the same width in spaces (which would not be a fixed point).
         """
         if not self.enabled("indent.continuation"):
             return piece.original_indent
         wanted = self._continuation_indent(opener)
         cur = text_width(piece.original_indent, 8)
-        if _prefer_aligned(cur, opener.aligned, text_width(wanted, 8)):
+        step_w = text_width(wanted, 8)
+        if opener.aligned != step_w and _prefer_aligned(cur, opener.aligned, step_w):
             return " " * opener.aligned
         return wanted
 
