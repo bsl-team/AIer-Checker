@@ -129,3 +129,11 @@ def test_const_placement_against_a_profile():
     rep = analyze([build_document(file_src, "f.cpp")], baseline=profile, min_evidence=1)
     hits = findings(rep, "constant.placement", kind="against-profile")
     assert hits and "before-type" in hits[0].message
+
+
+def test_comma_join_against_a_profile():
+    base = extract(build_document("int main(){ a(),b(); c(),d(); }\n", "b.cpp"))
+    off = build_document("int main(){ a(); b(); }\n", "o.cpp")
+    rep = analyze([off], baseline=base, min_evidence=1)
+    hits = findings(rep, "statement.comma_join", kind="against-profile")
+    assert hits and hits[0].severity == "low"

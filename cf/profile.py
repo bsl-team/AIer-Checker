@@ -49,6 +49,7 @@ FEATURE_SPECS: dict[str, tuple[str, str, Any, Any]] = {
     "semicolon.required": ("bool", "statements end with ;", True, False),
     "constant.marker": ("str", "how constants are marked", "const", "none"),
     "constant.placement": ("str", "const sits before or after the type", "before-type", "before-type"),
+    "statement.comma_join": ("bool", "short calls joined with , instead of ;", False, False),
     "layout.case_indent": ("str", "case labels inside switch", "flush", "n/a"),
     "layout.wrap_operator": ("str", "operator position when a row wraps", "after", "after"),
     "layout.args_per_row": ("str", "argument layout in wrapped lists", "packed", "packed"),

@@ -68,6 +68,7 @@ class Extractor:
         self._imports()
         self._semicolons()
         self._constants()
+        self._statements()
         self.p.samples = [
             Sample(
                 path=self.doc.path,
@@ -622,6 +623,64 @@ class Extractor:
         if self.LITERAL_RE.match(match.group(2).strip()):
             self.rec("constant.marker", "define", tok.row)
 
+    # -- how short statements share a row ----------------------------------
+    def _statements(self) -> None:
+        """``cin.tie(0),cout.tie(0);`` (comma-join) vs ``cin.tie(0); cout.tie(0);`` (semicolon).
+
+        Only two adjacent *simple call* operands (``name(...)`` and nothing else) are compared,
+        so ``int a, b;`` (a declaration), ``f(x, y)`` (arguments) and an ``=`` in between never
+        register, and a ``;`` that merely precedes an already comma-joined pair is ignored.
+        """
+        if self.doc.spec.family == "python":
+            return  # a bare python comma builds a tuple; it is not a statement join
+        toks = self.doc.tokens
+        depths = self.doc.token_depths()
+        n = len(toks)
+        stmt_start = -1  # after the last ``; { }``
+        operand_start = -1  # after the last ``; { }`` or statement-level ``,``
+        i = 0
+        while i < n:
+            t = toks[i]
+            if t.kind in (CMT, STR, PRE):
+                i += 1
+                continue
+            _, parens, brackets = depths[i]
+            if parens == 0 and brackets == 0 and t.is_punct(",", ";"):
+                if t.is_punct(","):
+                    stop = _next_stop(toks, depths, i, _STMT_STOPS)
+                    if self._is_simple_call(toks, operand_start + 1, i, depths) and self._is_simple_call(toks, i + 1, stop, depths):
+                        self.rec("statement.comma_join", True, t.row)
+                    operand_start = i
+                else:  # ``;`` : only a join if both whole statements on this row are lone calls
+                    stop = _next_stop(toks, depths, i, (";", "{", "}"))
+                    if (
+                        stop < n
+                        and toks[stop].row == t.row
+                        and self._is_simple_call(toks, stmt_start + 1, i, depths)
+                        and self._is_simple_call(toks, i + 1, stop, depths)
+                    ):
+                        self.rec("statement.comma_join", False, t.row)
+                    operand_start = i
+            if parens == 0 and t.is_punct(";", "{", "}"):
+                stmt_start = i
+                operand_start = i
+            i += 1
+
+    def _is_simple_call(self, toks, start, end, depths) -> bool:
+        """A lone ``name(...)`` operand: begins with an identifier, ends with ``)`` and holds no
+        top-level comma, semicolon, brace or assignment."""
+        if start >= end:
+            return False
+        if toks[start].kind != ID or not toks[end - 1].is_punct(")"):
+            return False
+        for j in range(start, end):
+            if depths[j][1] > 0:
+                continue  # anything nested in parentheses belongs to the call's own arguments
+            tok = toks[j]
+            if tok.is_punct(",", ";", "{", "}", ":", "[", "]", "?") or tok.text in ASSIGN_OPS:
+                return False
+        return True
+
 
 def _indent_unit(pairs: list[tuple[int, int]]) -> int:
     """Infer the indent step from ``(width, level)`` pairs.
@@ -866,6 +925,18 @@ def _same_row_close(toks: list[Token], open_idx: int) -> int | None:
 def _inside_paren(doc: Document, toks: list[Token], i: int) -> bool:
     return doc.token_depths()[i][1] > 0
 
+
+def _next_stop(toks: list[Token], depths: list[tuple[int, int, int]], i: int, stops: tuple[str, ...]) -> int:
+    """Index of the next token in ``stops`` at paren depth 0 after ``i``, or ``len(toks)``."""
+    j = i + 1
+    while j < len(toks):
+        if depths[j][1] == 0 and toks[j].is_punct(*stops):
+            return j
+        j += 1
+    return j
+
+
+_STMT_STOPS = (",", ";", "{", "}")
 
 _IMPORT_KW = {"import", "from", "using", "include", "require"}
 

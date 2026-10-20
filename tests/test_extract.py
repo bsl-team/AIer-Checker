@@ -297,3 +297,26 @@ def test_const_placement_before_and_after_type():
 def test_trailing_member_const_is_not_a_placement_signal():
     prof = extract(build_document("struct S { int f() const; void g() const; };\n", "s.cpp"))
     assert prof.feature("constant.placement") is None
+
+
+def test_comma_join_vs_semicolon_between_calls():
+    joined = extract(build_document("int main(){ cin.tie(0),cout.tie(0); }\n", "j.cpp"))
+    assert joined.value("statement.comma_join") is True
+    separate = extract(build_document("int main(){ cin.tie(0); cout.tie(0); }\n", "s.cpp"))
+    assert separate.value("statement.comma_join") is False
+
+
+def test_comma_join_ignores_declarations_arguments_and_assignments():
+    for src in (
+        "int main(){ int a=1, b=2; }\n",        # declarator list
+        "int main(){ printf(\"%d %d\", a, b); }\n",  # arguments inside a call
+        "int main(){ x = f(); y = g(); }\n",    # assignments, not lone calls
+        "int main(){ v[0], v[1]; }\n",          # subscript expressions
+    ):
+        assert extract(build_document(src, "n.cpp")).feature("statement.comma_join") is None, src
+
+
+def test_comma_join_chained_operands_each_count():
+    prof = extract(build_document("int main(){ a(),b(),c(); }\n", "c.cpp"))
+    feat = prof.feature("statement.comma_join")
+    assert feat.counts["true"] == 2  # a-b and b-c both joined

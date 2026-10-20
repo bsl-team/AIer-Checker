@@ -39,6 +39,7 @@ NOT_REWRITTEN = {
     "comment.*": "comment text is never rewritten",
     "include.*": "reordering includes can change build behaviour",
     "constant.*": "adding, removing or moving const changes the program, not its layout",
+    "statement.*": "turning , into ; (or back) rewrites the token stream, not the layout",
 }
 
 ACCESS_KW = {"public", "private", "protected"}
