@@ -51,9 +51,39 @@ def test_classify_names():
     assert classify("MaxParts") == "PascalCase"
     assert classify("MAX_PARTS") == "UPPER_SNAKE_CASE"
     assert classify("x") is None
-    assert classify("sum") is None  # one lowercase word proves nothing
+    assert classify("sum") == "lowercase"  # cannot tell snake from camel, but says "not capitalised"
     assert classify("__init__") is None
     assert classify("_private_helper") == "snake_case"
+
+
+def test_lowercase_names_outvote_a_couple_of_capitalised_ones():
+    # a bare lowercase word used to be dropped entirely, so two ``End``/``Flag`` arrays decided the
+    # whole role was PascalCase in code that names everything in lowercase
+    src = (
+        "int main(){\n"
+        "    int n=1, ans=0, flag=0, sum=0, cnt=0;\n"
+        "    int End[10];\n"
+        "    bool Flag=true;\n"
+        "    return n+ans+flag+sum+cnt+End[0]+Flag;\n"
+        "}\n"
+    )
+    prof = extract(build_document(src, "t.cpp"))
+    variable = prof.feature("naming.variable")
+    assert variable.counts["lowercase"] == 4  # ans, flag, sum, cnt (``n`` is one letter: no evidence)
+    assert prof.value("naming.variable") == "lowercase"
+
+
+def test_lowercase_words_fold_into_the_convention_the_role_already_shows():
+    src = (
+        "int main(){\n"
+        "    int someValue=1, other=2, totalSum=3;\n"
+        "    return someValue+other+totalSum;\n"
+        "}\n"
+    )
+    prof = extract(build_document(src, "c.cpp"))
+    # ``other`` is one lowercase word: it joins camelCase, the convention this role shows
+    counts = prof.feature("naming.variable").counts
+    assert "lowercase" not in counts and counts["camelCase"] == 3
 
 
 def test_knr_indent_brace_and_spacing(knr):
@@ -99,7 +129,12 @@ def test_js_profile(js):
     assert js.value("indent.size") == 2
     assert js.value("quote.style") == "single"
     assert js.value("semicolon.required") is True
-    assert js.value("naming.constant") == "UPPER_SNAKE_CASE"
+    # the file declares DEFAULT_NAME in UPPER_SNAKE but also two lowercase consts, so the
+    # majority reading is "lowercase" with UPPER_SNAKE_CASE kept visible as the deviation
+    constant = js.feature("naming.constant")
+    assert constant.counts["UPPER_SNAKE_CASE"] == 1
+    assert js.value("naming.constant") == "lowercase"
+    assert js.confidence("naming.constant") < 0.5
     assert js.value("layout.trailing_comma") is True
 
 

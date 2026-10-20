@@ -7,7 +7,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 
 from .document import Document, expand_width
-from .naming import classify, roles
+from .naming import LOWERCASE_FAMILY, classify, roles
 from .profile import Feature, Profile, Sample
 from .tokens import CHR, CMT, ID, KW, NUM, PUNCT, PRE, STR, Token
 
@@ -520,10 +520,19 @@ class Extractor:
     # -- naming ---------------------------------------------------------
     def _naming(self) -> None:
         for role, names in roles(self.doc).items():
-            for row, name in names:
-                style = classify(name)
-                if style:
-                    self.rec(f"naming.{role}", style, row)
+            seen = [(row, classify(name)) for row, name in names]
+            specific = Counter(s for _r, s in seen if s in LOWERCASE_FAMILY)
+            # a bare lowercase word ("ans", "label") is spelled identically in snake_case and in
+            # camelCase, so it can only confirm whichever of those this role already shows; with
+            # no such evidence it stays "lowercase" instead of inventing a convention.  Dropping
+            # these names entirely used to let two ``Foo``-style names win naming.variable.
+            fold_to = max(specific, key=specific.get) if specific else None
+            for row, style in seen:
+                if not style:
+                    continue
+                if style == "lowercase" and fold_to:
+                    style = fold_to
+                self.rec(f"naming.{role}", style, row)
 
     # -- imports --------------------------------------------------------
     def _imports(self) -> None:

@@ -8,6 +8,8 @@ from .tokens import ID, KW, PRE, PUNCT
 
 TYPE_KW = {"class", "struct", "enum", "union", "interface", "trait", "impl", "record"}
 CONST_KW = {"const", "constexpr", "final", "readonly", "static", "volatile"}
+# conventions a bare lowercase word is compatible with (it cannot tell them apart)
+LOWERCASE_FAMILY = ("snake_case", "camelCase")
 TYPE_INTRO_KW = TYPE_KW | {
     "type", "typedef", "namespace", "module", "package", "using", "func", "fn", "def", "new"
 }
@@ -20,7 +22,7 @@ def classify(name: str) -> str | None:
     core = name.strip("_")
     if len(core) <= 1:
         return None
-    if core.startswith("__") and core.endswith("__") and len(core) > 4:
+    if name.startswith("__") and name.endswith("__") and len(name) > 4:
         return None  # python dunder: fixed by the language, says nothing about the author
     parts = [p for p in core.split("_") if p]
     if not parts:
@@ -40,7 +42,11 @@ def classify(name: str) -> str | None:
         return "PascalCase" if not solo[1:].isupper() else "mixed_case"
     if any(c.isupper() for c in solo):
         return "camelCase"
-    return None  # one lowercase word fits camelCase and snake_case alike
+    # ``ans`` is spelled the same in snake_case and in camelCase, so it cannot tell those two
+    # apart -- but it does say "this author does not capitalise".  Returning None here used to
+    # drop every plain lowercase name, so a file with 20 of them and 2 ``Foo``-style names
+    # reported naming.variable=PascalCase.
+    return "lowercase"
 
 
 def roles(doc: Document) -> dict[str, list[tuple[int, str]]]:
