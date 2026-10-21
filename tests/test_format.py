@@ -402,3 +402,35 @@ def test_wrapped_continuation_rows_reach_a_fixed_point_in_one_pass():
     once = fmt(src, "t.cpp", profile)
     assert "\t\t\tans," in once, once          # the profile's own filler, not a space run
     assert fmt(once, "t.cpp", profile) == once, "a second pass must not move the continuation rows"
+
+
+def test_the_token_guard_refuses_and_returns_the_original_text(monkeypatch):
+    """Contract: a rewrite that would move tokens must be refused, not shipped."""
+    src = "int main(){\n\tint a = 1;\n\treturn a;\n}\n"
+    doc = build_document(src, "guard.cpp")
+    profile = extract(doc)
+
+    real_render = Formatter._render
+
+    def dropping_a_row(self, pieces):
+        return real_render(self, pieces)[:-1]          # silently lose a statement
+
+    monkeypatch.setattr(Formatter, "_render", dropping_a_row)
+    res = format_source(src, "guard.cpp", profile, FormatOptions())
+    assert res.error and "token count" in res.error
+    assert res.text == src, "a refusal must hand back the untouched original"
+    assert res.changed is False
+
+
+def test_the_token_guard_refuses_a_rewritten_token(monkeypatch):
+    src = "int main(){\n\tint a = 1;\n\treturn a;\n}\n"
+    profile = extract(build_document(src, "guard2.c"))
+    real_body = Formatter._body
+
+    def renaming(self, cells):
+        return real_body(self, cells).replace("return", "retturn")
+
+    monkeypatch.setattr(Formatter, "_body", renaming)
+    res = format_source(src, "guard2.c", profile, FormatOptions())
+    assert res.error and "would change" in res.error
+    assert res.text == src
