@@ -145,6 +145,8 @@ _MESSAGES: list[tuple[str, str, str]] = [
      "已从 {count} 个样本建立档案 '{user}'（语言：{language}）"),
     ("c.updated", "updated profile '{user}' with {count} sample(s), language {language}",
      "已把 {count} 个样本合并进档案 '{user}'（语言：{language}）"),
+    ("c.replaced", "replaced profile '{user}' with {count} sample(s), language {language}",
+     "已用 {count} 个样本覆盖档案 '{user}'（语言：{language}）"),
     ("c.deleted", "deleted profile '{user}'", "已删除档案 '{user}'"),
     ("c.renamed", "renamed '{old}' to '{new}'", "已把 '{old}' 改名为 '{new}'"),
     ("c.exported", "wrote {user} to {path}", "已把 {user} 的档案写入 {path}"),

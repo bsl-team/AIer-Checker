@@ -297,3 +297,13 @@ def test_k05_format_from_a_file_does_not_put_source_in_the_json(capsys, store):
     _code, out, _err = run(capsys, ["format", "--user", "bin", "--store", store,
                                     sample_path("cpp_knr.cpp"), "--json"])
     assert "text" not in json.loads(out)["files"][0]
+
+
+def test_k09_adding_to_an_existing_profile_says_updated_not_created(capsys, store):
+    _code, out, _err = run(capsys, ["profile", "add", "bin", sample_path("cpp_knr.cpp"), "--store", store])
+    assert "created profile 'bin'" in out
+    _code, out, _err = run(capsys, ["profile", "add", "bin", sample_path("cpp_allman.cpp"), "--store", store])
+    assert out.splitlines()[0].startswith("updated profile 'bin'"), out.splitlines()[0]
+    _code, out, _err = run(capsys, ["profile", "add", "bin", sample_path("cpp_allman.cpp"),
+                                    "--replace", "--store", store])
+    assert "replaced profile 'bin'" in out

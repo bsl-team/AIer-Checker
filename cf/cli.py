@@ -211,12 +211,19 @@ def cmd_profile(args) -> int:
             raise InputError(t("e.need_samples", action=f"profile {action}"))
         docs, _meta = load_inputs(args.files, args.lang)
         replace = action == "add" and args.replace
+        name = args.name.strip() if args.name and args.name.strip() else "default"
+        existed = store.get(name) is not None
         profile = store.add_from_samples(args.name, docs, replace=replace)
         store.flush()
         if args.json:
             print(json.dumps(profile.to_dict(), indent=2, ensure_ascii=False))
         else:
-            key = "c.created" if replace or action == "add" else "c.updated"
+            if not existed:
+                key = "c.created"
+            elif replace:
+                key = "c.replaced"
+            else:
+                key = "c.updated"
             print(t(key, user=profile.user, count=len(docs), language=profile.language))
             print(t("r.store_path", path=store.path))
             print(render_profile(profile, min_confidence=args.min_confidence))
