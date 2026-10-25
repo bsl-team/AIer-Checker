@@ -94,6 +94,7 @@ _MESSAGES: list[tuple[str, str, str]] = [
     ("e.store_damaged", "profile {name} in {path} is damaged: {error}",
      "档案库 {path} 中的 {name} 已损坏：{error}"),
     ("e.store_write", "cannot write profile store {path}: {error}", "无法写入档案库 {path}：{error}"),
+    ("e.store_locked", "profile store {path} is locked by another process", "档案库 {path} 被其他进程占用"),
     ("e.rename_taken", "cannot rename {old} to {new}: name taken or empty",
      "无法把 {old} 改名为 {new}：目标名为空或已存在"),
     ("e.import_json", "profile text is not valid JSON: {error}", "待导入的档案文本不是合法 JSON：{error}"),

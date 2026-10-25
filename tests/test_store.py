@@ -148,3 +148,41 @@ def test_profile_without_samples_can_still_be_stored(store):
     store.put(prof)
     assert store.get("empty").features == {}
     assert store.summaries()[0].samples == 0
+
+
+def test_k10_two_writers_do_not_lose_each_other(tmp_path):
+    path = str(tmp_path / "profiles.json")
+    a = ProfileStore(path)
+    b = ProfileStore(path)
+    a.add_from_samples("alice", [doc("cpp_knr.cpp")])
+    a.flush()
+    # b read the store before alice's write landed, then adds bob: both must survive
+    b.add_from_samples("bob", [doc("cpp_allman.cpp")])
+    b.flush()
+    assert ProfileStore(path).users() == ["alice", "bob"]
+
+
+def test_k10_the_same_user_still_follows_the_last_writer(tmp_path):
+    path = str(tmp_path / "profiles.json")
+    a = ProfileStore(path)
+    a.add_from_samples("bin", [doc("cpp_knr.cpp")])
+    a.flush()
+    b = ProfileStore(path)
+    b.add_from_samples("bin", [doc("cpp_allman.cpp")], replace=True)
+    b.flush()
+    assert ProfileStore(path).require("bin").family == "clike"
+    assert len(ProfileStore(path).users()) == 1
+
+
+def test_k10_lock_is_released_after_flush(tmp_path):
+    path = str(tmp_path / "profiles.json")
+    store = ProfileStore(path)
+    store.add_from_samples("bin", [doc("cpp_knr.cpp")])
+    store.flush()
+    sidecar = path + ".lock"
+    assert os.path.exists(sidecar)
+    # a second writer can take the lock immediately (no stale lock left behind)
+    other = ProfileStore(path)
+    other.add_from_samples("fei", [doc("cpp_allman.cpp")])
+    other.flush()
+    assert set(ProfileStore(path).users()) == {"bin", "fei"}

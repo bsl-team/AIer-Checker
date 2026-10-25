@@ -5,6 +5,7 @@ import json
 import os
 import tempfile
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 
 from .document import Document
@@ -16,10 +17,71 @@ DEFAULT_DIR = os.path.join(os.path.expanduser("~"), ".code-feature")
 DEFAULT_FILE = os.path.join(DEFAULT_DIR, "profiles.json")
 ENV_VAR = "CF_STORE"
 STORE_VERSION = 1
+LOCK_TIMEOUT = 10.0
+LOCK_RETRY = 0.05
 
 
 class StoreError(Exception):
     pass
+
+
+def _lock_acquire(handle) -> bool:
+    """Take an exclusive advisory lock without blocking; False if someone else holds it."""
+    try:
+        import msvcrt  # Windows
+    except ImportError:
+        import fcntl
+
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return True
+        except OSError:
+            return False
+    try:
+        msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+        return True
+    except OSError:
+        return False
+
+
+def _lock_release(handle) -> None:
+    try:
+        import msvcrt
+    except ImportError:
+        import fcntl
+
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        return
+    handle.seek(0)
+    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+
+
+@contextmanager
+def _store_lock(path: str):
+    """Serialise read-modify-write on the store across processes.
+
+    A sidecar lock file is used rather than the store itself, because ``os.replace`` swaps the
+    data file's inode and a lock on it would not protect the next writer.  Inside the lock
+    :meth:`ProfileStore.flush` re-reads the file and keeps users it does not know about, so two
+    processes adding different users both survive.
+    """
+    lock_path = path + ".lock"
+    folder = os.path.dirname(lock_path) or "."
+    os.makedirs(folder, exist_ok=True)
+    deadline = time.monotonic() + LOCK_TIMEOUT
+    handle = open(lock_path, "a+b")
+    try:
+        while not _lock_acquire(handle):
+            if time.monotonic() >= deadline:
+                raise StoreError(t("e.store_locked", path=path))
+            time.sleep(LOCK_RETRY)
+        yield
+    finally:
+        try:
+            _lock_release(handle)
+        except OSError:
+            pass
+        handle.close()
 
 
 @dataclass
@@ -51,12 +113,9 @@ class ProfileStore:
         self._users: dict[str, Profile] | None = None
 
     # -- file access ------------------------------------------------------
-    def _read(self) -> dict[str, Profile]:
-        if self._users is not None:
-            return self._users
+    def _read_from_file(self) -> dict[str, Profile]:
         if not os.path.exists(self.path):
-            self._users = {}
-            return self._users
+            return {}
         try:
             with open(self.path, encoding="utf-8") as fh:
                 raw = json.load(fh)
@@ -70,30 +129,41 @@ class ProfileStore:
                 users[name] = Profile.from_dict(data)
             except Exception as exc:
                 raise StoreError(t("e.store_damaged", name=repr(name), path=self.path, error=exc)) from exc
-        self._users = users
         return users
+
+    def _read(self) -> dict[str, Profile]:
+        if self._users is None:
+            self._users = self._read_from_file()
+        return self._users
 
     def flush(self) -> None:
         users = self._read()
-        payload = {
-            "version": STORE_VERSION,
-            "updated": time.time(),
-            "users": {name: p.to_dict() for name, p in sorted(users.items())},
-        }
-        folder = os.path.dirname(self.path) or "."
-        os.makedirs(folder, exist_ok=True)
-        fd, tmp = tempfile.mkstemp(dir=folder, prefix=".profiles-", suffix=".json")
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
-                json.dump(payload, fh, indent=2, ensure_ascii=False)
-                fh.write("\n")
-            os.replace(tmp, self.path)
-        except OSError as exc:
+        with _store_lock(self.path):
+            on_disk = self._read_from_file()
+            # keep users another process wrote while we held our own copy; our entries win for
+            # the same user, because we are the one that just changed them
+            for name, profile in on_disk.items():
+                users.setdefault(name, profile)
+            self._users = users
+            payload = {
+                "version": STORE_VERSION,
+                "updated": time.time(),
+                "users": {name: p.to_dict() for name, p in sorted(users.items())},
+            }
+            folder = os.path.dirname(self.path) or "."
+            os.makedirs(folder, exist_ok=True)
+            fd, tmp = tempfile.mkstemp(dir=folder, prefix=".profiles-", suffix=".json")
             try:
-                os.unlink(tmp)
-            except OSError:
-                pass
-            raise StoreError(t("e.store_write", path=self.path, error=exc)) from exc
+                with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
+                    json.dump(payload, fh, indent=2, ensure_ascii=False)
+                    fh.write("\n")
+                os.replace(tmp, self.path)
+            except OSError as exc:
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
+                raise StoreError(t("e.store_write", path=self.path, error=exc)) from exc
 
     # -- users ------------------------------------------------------------
     def users(self) -> list[str]:
