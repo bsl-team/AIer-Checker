@@ -439,6 +439,9 @@ class Formatter:
         if self.doc.is_template_angle(tok.index):
             if tok.is_punct("<"):
                 return self._spaced("space.before_template_angle", False)  # vector<int> vs vector <int>
+            if prev.is_punct(">", ">>") and self.doc.is_template_angle(prev.index):
+                # ``> >`` is two tokens; closing it up would emit ``>>`` and change the program
+                return (max(1, tok.gap), None)
             return self._spaced("space.inside_template_angle", False)  # the closing > / >>
         if prev.is_punct("<") and self.doc.is_template_angle(prev.index):
             return self._spaced("space.inside_template_angle", False)  # token right after <

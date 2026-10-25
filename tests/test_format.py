@@ -470,3 +470,23 @@ def test_k04_an_over_long_row_is_recorded_as_a_deviation_but_still_reads_as_a_nu
     profile = extract(build_document(src, "t.cpp"))
     assert profile.feature("width.limit").counts.get(">79") == 1
     assert profile.value("width.limit") == 79  # not None: ``>79`` still names the limit 79
+
+
+def test_k06_nested_template_closers_are_never_merged():
+    # closing up ``> >`` would emit ``>>`` and change the program, so that one space must survive
+    src = (
+        "#include <vector>\n"
+        "using namespace std;\n"
+        "int main() {\n"
+        "    vector <pair <int, int> > a;\n"
+        "    vector <int> b;\n"
+        "    return 0;\n"
+        "}\n"
+    )
+    profile = profile_of(**{"space.inside_template_angle": False, "space.before_template_angle": False})
+    res = format_source(src, "k06.cpp", profile, FormatOptions())
+    assert not res.error, res.error
+    assert "vector<pair<int, int> > a;" in res.text, res.text
+    assert "vector<int> b;" in res.text, res.text
+    assert token_identity(src, "k06.cpp") == token_identity(res.text, "k06.cpp")
+    assert format_source(res.text, "k06.cpp", profile, FormatOptions()).text == res.text
