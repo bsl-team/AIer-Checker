@@ -1044,7 +1044,7 @@ def _is_pointer_op(cells: list[Cell], idx: int) -> bool:
     ppr = cells[idx - 2].tok if idx >= 2 else None
     if ppr is not None and tok is not None and ppr.row != tok.row:
         ppr = None
-    return is_pointer_op(ppr, pr, tok, nx)
+    return is_pointer_op(ppr, pr, tok, nx, [c.tok for c in cells], idx)
 
 
 def _op_binary(cells: list[Cell], idx: int) -> bool:

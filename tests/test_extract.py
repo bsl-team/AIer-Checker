@@ -412,3 +412,28 @@ def test_parameter_list_splits_type_and_name_correctly():
 def test_user_type_before_a_name_declares_the_name_not_the_type():
     r = roles(build_document("Node node;\nint total = 0;\nint main(){ return node.total; }\n", "t.cpp"))
     assert [n for _row, n in r["variable"]] == ["node", "total"]
+
+
+def test_pointer_axis_ignores_multiplication_in_call_arguments():
+    src = "int g(int a, int b) {\n    return f(a * b) + (a & b) + dx * dx;\n}\n"
+    prof = extract(build_document(src, "t.cpp"))
+    assert prof.feature("space.around_pointer") is None
+
+
+def test_pointer_axis_ignores_arithmetic_in_a_condition():
+    prof = extract(build_document("int main(){ int a,b; while (a * b > 1) { a--; } }\n", "t.cpp"))
+    assert prof.feature("space.around_pointer") is None
+
+
+def test_pointer_axis_still_reads_real_declarators():
+    cases = {
+        "int *p;\nint main(){return 0;}\n": "name",
+        "int* p;\nint main(){return 0;}\n": "type",
+        "int * p;\nint main(){return 0;}\n": "spaced",
+        "void f(int *p){}\n": "name",
+        "void f(const int &x){}\n": "name",
+        "int *p, *q;\nint main(){return 0;}\n": "name",
+    }
+    for src, expected in cases.items():
+        prof = extract(build_document(src, "t.cpp"))
+        assert prof.value("space.around_pointer") == expected, (src, prof.value("space.around_pointer"))

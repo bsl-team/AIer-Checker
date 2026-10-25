@@ -257,7 +257,7 @@ class Extractor:
         ppr = toks[i - 2] if i >= 2 else None
         if ppr is not None and ppr.row != t.row:
             ppr = None
-        if not is_pointer_op(ppr, pr, t, nx):
+        if not is_pointer_op(ppr, pr, t, nx, toks, i):
             return
         value = None
         if t.gap > 0 and nx.gap == 0:
@@ -775,11 +775,13 @@ POINTER_PPR_KW = {
 }
 
 
-def is_pointer_op(ppr, pr, tok, nx) -> bool:
+def is_pointer_op(ppr, pr, tok, nx, toks=None, i=None) -> bool:
     """Is ``tok`` a ``*``/``&`` declarator rather than multiplication or bitwise-and?
 
     Requires a type-ish token on the left, a name on the right, and a left neighbour that
-    still makes declaration sense: ``return a * b`` and ``c = a * b`` are arithmetic.
+    still makes declaration sense: ``return a * b`` and ``c = a * b`` are arithmetic.  An
+    identifier in front of the star is only a type when the surrounding parenthesis is a
+    function's parameter list, so ``f(int *p)`` counts and ``f(a * b)`` does not.
     """
     if tok is None or tok.kind != PUNCT or tok.text not in ("*", "&", "&&"):
         return False
@@ -791,10 +793,53 @@ def is_pointer_op(ppr, pr, tok, nx) -> bool:
         return False
     if ppr is None:
         return True
+    if pr.kind == ID and ppr.kind == PUNCT and ppr.text in ("(", ","):
+        return _in_parameter_list(toks, i) if toks is not None else False
     if ppr.kind == PUNCT:
         return ppr.text in POINTER_PPR_PUNCT
     if ppr.kind == KW:
         return ppr.text in POINTER_PPR_KW
+    return False
+
+
+def _in_parameter_list(toks: list[Token], i: int) -> bool:
+    """Is the token at ``i`` inside a function's parameter list rather than a call's arguments?
+
+    A parameter list either mentions a keyword (``int``, ``const``, ``void``...) or belongs to a
+    definition, i.e. its ``)`` is followed by a block.  Without that evidence we treat the star as
+    arithmetic: losing one pointer observation is cheap, rewriting ``a * b`` into ``a *b`` is not.
+    """
+    if i is None or i >= len(toks):
+        return False
+    depth = 0
+    open_idx = None
+    for j in range(i, -1, -1):
+        t = toks[j]
+        if t.is_punct(")"):
+            depth += 1
+        elif t.is_punct("("):
+            if depth == 0:
+                open_idx = j
+                break
+            depth -= 1
+    if open_idx is None:
+        return False
+    before = toks[open_idx - 1] if open_idx else None
+    if before is None or before.kind not in (ID, KW):
+        return False
+    if before.kind == KW and before.text in CONTROL_PAREN_KW:
+        return False  # while (a * b) is a condition, not a declaration
+    close = _match(toks, open_idx)
+    if close is None:
+        return False
+    if any(t.kind == KW for t in toks[open_idx + 1 : close]):
+        return True
+    for j in range(close + 1, min(close + 8, len(toks))):
+        t = toks[j]
+        if t.is_punct("{"):
+            return True
+        if t.is_punct(";", ")", ","):
+            return False
     return False
 
 

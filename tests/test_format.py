@@ -434,3 +434,19 @@ def test_the_token_guard_refuses_a_rewritten_token(monkeypatch):
     res = format_source(src, "guard2.c", profile, FormatOptions())
     assert res.error and "would change" in res.error
     assert res.text == src
+
+
+def test_k03_pointer_rule_never_respaces_multiplication():
+    src = "int g(int a, int b) {\n    return f(a * b);\n}\n"
+    profile = profile_of(**{"space.around_pointer": "name"})
+    out = fmt(src, "t.cpp", profile)
+    assert out == src, out
+    assert "space.around_pointer" not in _applied(src, "t.cpp", profile)
+
+
+def test_k03_pointer_rule_still_hugs_the_name():
+    src = "int * p;\nint main(){ return 0; }\n"
+    profile = profile_of(**{"space.around_pointer": "name"})
+    out = fmt(src, "t.cpp", profile)
+    assert "int *p;" in out, out
+    assert token_identity(src, "t.cpp") == token_identity(out, "t.cpp")
