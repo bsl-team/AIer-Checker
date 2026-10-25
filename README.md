@@ -1,8 +1,8 @@
 # cf — 代码风格内核
 
-从代码样本里提取作者的书写风格，检查风格是否自相矛盾，按用户保存风格档案，并据此重新排版代码。
-**内核不含任何界面**：全部能力通过 `cf` 命令行或 `import cf` 提供；`demo/` 下是一个可选的
-tkinter 演示程序，不属于内核。
+从代码样本里提取作者的书写风格，检查风格是否自相矛盾，按用户保存风格档案，据此重新排版代码，
+并且跨用户比较提交的结构性相似（查重）。**内核不含任何界面**：全部能力通过 `cf` 命令行或
+`import cf` 提供；`demo/` 下是一个可选的 tkinter 演示程序，不属于内核。
 
 零第三方依赖，只用 Python 标准库（Python 走 `ast` + `tokenize`，其余语言走内置的 clike 词法器）。
 
@@ -12,6 +12,9 @@ cf extract src/*.cpp                  # 这批代码体现了什么风格
 cf check src/*.cpp --fail-on medium   # 内部有没有自相矛盾
 cf profile add bin --lang cpp src/*.cpp
 cf format --user bin --write src/*.cpp
+cf dup --manifest subs.json           # 多用户提交里找重复嫌疑
+cf similar alice.cpp bob.cpp          # 只比一对
+cf audit --manifest subs.json --store profiles.json --signals ai.json
 ```
 
 ---
@@ -40,6 +43,10 @@ cf format --user bin --write src/*.cpp
    也不会把 LF 文件改成 CRLF（除非你显式传 `--eol crlf`）。
 7. **提示语可切中英文。** 默认英文；`-L/--msg-lang zh`（可出现在命令行任意位置）或
    环境变量 `CF_LANG=zh` 切换，覆盖报告、错误信息与 `--help`。
+8. **查重不联网、不执行被检查的代码、不把源码写进报告。** 证据只有行段与 token 数；
+   分数只用于排队给人看，`flags` 是理由列表，不是结论。
+9. **查重的规范化会抹掉可变信息。** 改名、空白、注释、字面量差异都不影响分数；
+   指纹用 FNV-1a 64 位而不是 `hash()`，所以两次运行、两个进程的结果逐字节相同。
 
 ## 2. 公开 API
 
@@ -54,7 +61,16 @@ cf.ProfileStore(path=None)                 # 用户 -> 风格档案
 cf.format_code(src, profile, path=None, options=None) -> FormatResult
 cf.token_identity(src, path=None)          # 契约 1 用的比较基准
 cf.set_locale("zh") / cf.get_locale() / cf.t(key, **kw)
+
+# 查重（cf.similarity / cf.audit）
+cf.fingerprint(doc, k=7, window=4, winnow=True) -> Fingerprint
+cf.compare_documents(a, b, **阈值) -> Similarity        # 一份配对
+cf.find_duplicates([Submission(...)], **阈值) -> SimilarityReport   # 含聚类
+cf.normalize(doc) -> list[NormalToken]                # 规范化后的结构流
+cf.audit.build_audit(submissions, store=..., signals=...) -> AuditReport
 ```
+
+所有查重/审计对象都带 `to_dict()`，可直接 `json.dumps`；输出顺序确定。
 
 `FormatResult` 带 `text / changed / applied / skipped / error`：`applied` 是真正改动了的规则，
 `skipped` 是因证据不足没动手的规则，`error` 非空表示拒绝执行（此时 `text` 就是原文）。
@@ -68,9 +84,13 @@ cf.set_locale("zh") / cf.get_locale() / cf.t(key, **kw)
 | `cf profile <子命令>` | 档案管理 | `add/update/list/show/delete/rename/export/import` |
 | `cf format FILES…` | 重新排版 | 默认只预览；`--write`/`--check`/`--diff`/`--rules`/`--observed-only`/`--no-wrap`/`--eol` |
 | `cf rules` / `cf languages` | 查词表与支持度 | |
+| `cf dup [--manifest M] FILES…` | 多用户查重与聚类 | `--min-score/--min-containment/--min-shared/--min-tokens/--k/--window/--no-winnow/--keep-common/--cross-user/--same-user/--all-problems/--cross-language/--top/--evidence/--fail-on/--max-candidates` |
+| `cf similar A B` | 只比一对文件 | 不用 manifest，不按阈值决定退出码 |
+| `cf audit --manifest M --store S [--signals X]` | 查重 + 与本人档案的偏离 + 外部信号 | 信号按 `id`/`path` 原样合并，内核不解释 |
 
-* **退出码**：`0` 成功；`1` 发现了问题（`check` 达到 `--fail-on` 阈值，或 `format --check` 有改动）；
-  `2` 用法或输入错误（含"无法安全格式化"的文件，见 `stderr`）。
+* **退出码**：`0` 成功；`1` 发现了问题（`check` 达到 `--fail-on` 阈值，`format --check` 有改动，
+  或 `dup`/`audit` 按 `--fail-on` 命中配对——`dup` 默认在有 manifest 时看跨用户、无 manifest 时看有无配对）；
+  `2` 用法或输入错误（含"无法安全格式化"的文件与坏 manifest，见 `stderr`）。
 * **不给文件名或给 `-` 就读标准输入**，`cf format -` 把结果写到标准输出。
 * **命令行自己展开 glob**（`src\*.cpp`），因为 cmd.exe 和 PowerShell 不会替你展开。
 * 档案库路径优先级：`--store` > 环境变量 `CF_STORE` > `~/.code-feature/profiles.json`。
@@ -117,9 +137,9 @@ Python 支持最全（`tokenize` + `ast` 双路），其余语言共用一套 cl
 
 ## 7. 契约是怎么被验证的
 
-* 单元/端到端测试 215 条（词法、文档、提取、一致性、档案存储、格式化、CLI、GUI 服务层、i18n）。
-  其中成组地跑真实样本，断言"格式化后 token 不变""再格式化一次没有新改动"；并用受控的故障注入
-  证明 token 保险确实会触发（一旦改动会丢 token，就返回原文并给出拒绝原因）。
+* 单元/端到端测试 258 条（词法、文档、提取、一致性、档案存储、格式化、查重、审计、CLI、
+  GUI 服务层、i18n）。其中成组地跑真实样本，断言"格式化后 token 不变""再格式化一次没有新改动"；
+  并用受控的故障注入证明 token 保险确实会触发（一旦改动会丢 token，就返回原文并给出拒绝原因）。
 * 大规模语料回归：Python 标准库 185 个真实文件，以及 864 个真实 OI 解答 `.cpp`
   （各自档案 + 共享档案两轮），均达到 **0 崩溃 / 0 拒绝 / 0 改 token / 0 非幂等**。
 * 有意保留的采集空白，是为了不产生假证据：函数式宏（`#define SQ(x)`）、成员函数尾随的
@@ -136,12 +156,22 @@ Python 支持最全（`tokenize` + `ast` 双路），其余语言共用一套 cl
 * C++ 的 `>>` 是一个 token，`vector<vector<int>>` 内外层共享同一个闭合符，内侧空格按整体处理。
 * Windows 上 `cf format -` 经标准输出写结果时走文本模式，管道里 LF 会变成 CRLF；
   `--write` 原地改写文件不受影响（见契约 6）。
+* Python 的 token 保险**不含 INDENT/DEDENT**：缩进层级由 `python_levels` 重建，
+  "层级变了但 token 序列不变"的错误保险抓不到。这是已接受的取舍。
+* 折行只在**单个括号组的顶层逗号**处尝试：不保证每行都压进 `width.limit`，
+  单个超长 token（长字符串、长标识符）也不会被切开。
+* `Profile.merge` 合并 `rows` 时不记录来源文件：多样本档案里的行号只表示"某个样本的第几行"，
+  跨文件定位请另用 `cf check --json` 的逐文件结果。
+* 编码探测按 UTF-8 → GBK → CP936 → BIG5 → CP1252 → latin-1 顺序试：某些 CP1252 字节会先被
+  GBK 解成错字。要严格检测应在 BOM/UTF-16 之外加校验，而不是无限扩表。
+* 查重的聚类是**传递闭包**：A≈B、B≈C 会把三份并成一组，即使 A 与 C 并不相似；
+  报告里以 `transitive-clusters` 提示。
 
 ## 9. 开发
 
 ```
 pip install -e .
-python -m pytest -q                 # 215 个测试
+python -m pytest -q                 # 258 个测试
 python -m cf.cli --help             # 未安装也可以直接跑
 cf-demo                             # 可选的 tkinter 演示（不属于内核）
 ```
