@@ -145,3 +145,23 @@ def test_python_shebang_is_enough_without_an_extension():
 def test_long_license_header_does_not_push_python_past_the_head_window():
     header = "".join(f"# copyright line {i}\n" for i in range(120))
     assert detect(None, header + "\ndef main():\n    pass\n").name == "python"
+
+
+def test_k02_cpp_and_csharp_inheritance_is_not_python():
+    assert detect(None, "class Foo : public Bar {\npublic:\n    int x;\n};\n").name != "python"
+    assert detect(None, "class Foo : Bar {\n    int x;\n}\n").name != "python"
+    assert detect(None, "class Foo : Bar {\n    int x;\n}\n").name == "clike"
+
+
+def test_k02_python_class_headers_still_detect():
+    assert detect(None, "class Foo:\n    pass\n").name == "python"
+    assert detect(None, "class Foo(Base, Mixin):\n    pass\n").name == "python"
+    assert detect(None, "class Foo(object):  # note\n    pass\n").name == "python"
+
+
+def test_k02_oi_cpp_without_an_extension_is_cpp_not_c():
+    src = ("#include <bits/stdc++.h>\nusing namespace std;\n"
+           "int main(){ vector<int> a; cout << 1; return 0; }\n")
+    assert detect(None, src).name == "cpp"
+    assert detect(None, "#include <stdio.h>\nint main(){ printf(\"x\"); return 0; }\n").name == "c"
+    assert detect("t.cpp", src).name == "cpp"          # the extension still wins

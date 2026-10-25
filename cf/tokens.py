@@ -193,14 +193,18 @@ def detect(path: str | None, src: str) -> Spec:
         if base in ("makefile", "dockerfile"):
             return SPEC_BY_NAME["shell"]
     head = src[:8000]
-    # ``class Foo {`` is C++/Java, not Python: a Python class header always ends in ``:``,
-    # optionally after a base list, so require that instead of any separator.
+    # A Python class header is ``class Name:`` or ``class Name(Base, ...):`` and the colon ends the
+    # line (a comment may follow).  ``class Foo : public Bar {`` and ``class Foo : Bar {`` are
+    # C++/C# inheritance and must not be claimed here.  [ \t] rather than \s so the match cannot
+    # reach across a line break.
+    python_class = r"class\s+\w+(?:[ \t]*\([^)]*\))?[ \t]*:[ \t]*(?:#.*)?$"
     if re.match(r"^#!.*\bpython\b", src) or re.search(
-        r"^\s*(from\s+\S+\s+import|def\s+\w+\s*\(|class\s+\w+\s*[:(]|import\s+\w+$)", head, re.M
+        r"^\s*(?:from\s+\S+\s+import|def\s+\w+\s*\(|" + python_class + r"|import\s+\w+$)", head, re.M
     ):
         return PYTHON
     if re.search(r"^\s*#include\s*[<\"]", head, re.M):
-        return SPEC_BY_NAME["cpp"] if re.search(r"\b(std::|template\s*<|class\s+\w+|new\s+\w+)", head) else SPEC_BY_NAME["c"]
+        cpp_signals = r"\b(std::|template\s*<|class\s+\w+|new\s+\w+|nullptr\b|\bcout\b|\bcin\b|using\s+namespace\b|bits/)"
+        return SPEC_BY_NAME["cpp"] if re.search(cpp_signals, head) else SPEC_BY_NAME["c"]
     if re.search(r"^\s*(package\s+main|func\s+\w+\s*\()", head, re.M):
         return SPEC_BY_NAME["go"]
     if re.search(r"^\s*(pub\s+fn|fn\s+\w+\s*\(|let\s+mut\s)", head, re.M):
