@@ -307,3 +307,108 @@ def test_k09_adding_to_an_existing_profile_says_updated_not_created(capsys, stor
     _code, out, _err = run(capsys, ["profile", "add", "bin", sample_path("cpp_allman.cpp"),
                                     "--replace", "--store", store])
     assert "replaced profile 'bin'" in out
+
+
+def _manifest(tmp_path, entries):
+    import json as _json
+
+    manifest = tmp_path / "m.json"
+    manifest.write_text(_json.dumps({"submissions": entries}, ensure_ascii=False), encoding="utf-8")
+    return str(manifest)
+
+
+def _pair_corpus(tmp_path):
+    base = read_sample("cpp_knr.cpp")
+    a = tmp_path / "alice.cpp"; a.write_text(base, encoding="utf-8")
+    b = tmp_path / "bob.cpp"; b.write_text(base.replace("values", "nums").replace("total", "acc"), encoding="utf-8")
+    c = tmp_path / "carol.cpp"; c.write_text(read_sample("cpp_allman.cpp"), encoding="utf-8")
+    return a, b, c
+
+
+def test_dup_reports_and_exits_one_for_a_cross_user_pair(capsys, tmp_path):
+    a, b, c = _pair_corpus(tmp_path)
+    man = _manifest(tmp_path, [
+        {"id": "alice-P", "user": "alice", "problem": "P", "path": "alice.cpp"},
+        {"id": "bob-P", "user": "bob", "problem": "P", "path": "bob.cpp"},
+        {"id": "carol-P", "user": "carol", "problem": "P", "path": "carol.cpp"}])
+    code, out, err = run(capsys, ["dup", "--manifest", man, "--min-tokens", "40"])
+    assert code == 1, err
+    assert "alice-P" in out and "bob-P" in out and "cluster-1" in out
+    assert "not a verdict" in out          # the disclaimer is part of the contract
+
+
+def test_dup_json_is_one_document_and_honours_fail_on_none(capsys, tmp_path):
+    a, b, c = _pair_corpus(tmp_path)
+    man = _manifest(tmp_path, [{"id": "x", "user": "u1", "path": "alice.cpp"},
+                               {"id": "y", "user": "u2", "path": "bob.cpp"}])
+    code, out, err = run(capsys, ["dup", "--manifest", man, "--min-tokens", "40", "--json"])
+    assert code == 1, err
+    payload = json.loads(out)              # stdout parses as JSON on its own, nothing printed first
+    assert payload["pairs"][0]["cross_user"] is True
+    _code, out, _err = run(capsys, ["dup", "--manifest", man, "--min-tokens", "40", "--json",
+                                    "--fail-on", "none"])
+    assert json.loads(out)["params"]["k"] == 7
+
+
+def test_dup_user_filters(capsys, tmp_path):
+    a, b, c = _pair_corpus(tmp_path)
+    man = _manifest(tmp_path, [{"id": "x", "user": "u1", "path": "alice.cpp"},
+                               {"id": "y", "user": "u2", "path": "bob.cpp"}])
+    _code, out, _err = run(capsys, ["dup", "--manifest", man, "--min-tokens", "40", "--same-user"])
+    assert "0 pair(s)" in out
+    code, out, _err = run(capsys, ["dup", "--manifest", man, "--min-tokens", "40", "--cross-user"])
+    assert code == 1 and "1 pair(s)" in out
+
+
+def test_dup_without_a_manifest_labels_users_unknown(capsys, tmp_path):
+    a, b, c = _pair_corpus(tmp_path)
+    code, out, err = run(capsys, ["dup", str(a), str(b), "--min-tokens", "40", "--json"])
+    assert code == 1, err                   # no manifest: default policy is "any"
+    payload = json.loads(out)
+    assert payload["pairs"][0]["user_a"] == "unknown"
+
+
+def test_dup_rejects_a_broken_manifest_with_exit_two(capsys, tmp_path):
+    bad = tmp_path / "bad.json"
+    bad.write_text('{"submissions": [{"user": "no path"}]}', encoding="utf-8")
+    code, out, err = run(capsys, ["dup", "--manifest", str(bad)])
+    assert code == 2 and "cf:" in err and "path" in err
+
+
+def test_similar_compares_one_pair(capsys, tmp_path):
+    a, b, c = _pair_corpus(tmp_path)
+    code, out, err = run(capsys, ["similar", str(a), str(b), "--min-tokens", "40"])
+    assert code == 0, err
+    assert "jaccard 1.000" in out and "row" in out
+    _code, out, _err = run(capsys, ["similar", str(a), str(c), "--json", "--min-tokens", "40"])
+    assert set(json.loads(out)) == {"pair"}
+
+
+def test_similar_needs_exactly_two_files(capsys, tmp_path):
+    a, b, _c = _pair_corpus(tmp_path)
+    code, _out, err = run(capsys, ["similar", str(a)])
+    assert code == 2 and "two files" in err
+
+
+def test_audit_combines_duplicates_style_and_signals(capsys, tmp_path, store):
+    a, b, c = _pair_corpus(tmp_path)
+    run(capsys, ["profile", "add", "alice", str(a), "--store", store])
+    run(capsys, ["profile", "add", "carol", str(c), "--store", store])
+    man = _manifest(tmp_path, [{"id": "alice-P", "user": "alice", "problem": "P", "path": "alice.cpp"},
+                               {"id": "bob-P", "user": "bob", "problem": "P", "path": "bob.cpp"},
+                               {"id": "carol-P", "user": "carol", "problem": "P", "path": "carol.cpp"}])
+    signals = tmp_path / "s.json"
+    signals.write_text(json.dumps({"signals": [{"id": "bob-P", "kind": "ai-author", "verdict": "maybe-ai"},
+                                               {"id": "ghost", "kind": "other"}]}), encoding="utf-8")
+    code, out, err = run(capsys, ["audit", "--manifest", man, "--store", store,
+                                  "--signals", str(signals), "--min-tokens", "40"])
+    assert code == 1, err
+    assert "alice-P" in out and "cross-user-duplicate" in out
+    assert "no-profile:bob-P" in out        # bob has no stored profile: say so, do not guess
+    assert "unmatched-signal:ghost" in out  # merged as given, flagged as unmatched
+    _code, out, _err = run(capsys, ["audit", "--manifest", man, "--store", store,
+                                    "--signals", str(signals), "--min-tokens", "40", "--json"])
+    payload = json.loads(out)
+    reasons = {f["id"]: f["reasons"] for f in payload["flags"]}
+    assert "external-signal" in reasons["bob-P"] and "cross-user-duplicate" in reasons["bob-P"]
+    assert payload["external_signals"], "signals are passed through unchanged"
