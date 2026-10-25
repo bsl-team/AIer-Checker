@@ -437,3 +437,12 @@ def test_pointer_axis_still_reads_real_declarators():
     for src, expected in cases.items():
         prof = extract(build_document(src, "t.cpp"))
         assert prof.value("space.around_pointer") == expected, (src, prof.value("space.around_pointer"))
+
+
+def test_k01_block_comment_ratio_is_observed_only_when_comments_exist():
+    assert extract(build_document("int main(){\n    return 0;\n}\n", "n.c")).feature("comment.block_ratio") is None
+    assert extract(build_document("// a\n// b\nint main(){ return 0; }\n", "l.c")).value("comment.block_ratio") == 0
+    mixed = extract(build_document("// a\n/* b */\n// c\nint main() {\n    return 0;\n}\n", "m.c"))
+    assert mixed.value("comment.block_ratio") == 33          # 1 of 3 comments is a block comment
+    assert mixed.stats["line_comments"] == 2 and mixed.stats["block_comments"] == 1
+    assert extract(build_document("/* a */\n/* b */\nint main(){ return 0; }\n", "b.c")).value("comment.block_ratio") == 100

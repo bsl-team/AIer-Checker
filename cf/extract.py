@@ -388,9 +388,12 @@ class Extractor:
     def _comments(self) -> None:
         spec = self.doc.spec
         line = block = 0
+        first_row: int | None = None
         for t in self.doc.tokens:
             if t.kind != CMT:
                 continue
+            if first_row is None:
+                first_row = t.row
             is_block = any(t.text.startswith(op) for op, _ in spec.block_comments)
             if is_block:
                 block += 1
@@ -408,6 +411,9 @@ class Extractor:
         stats = self.p.stats
         stats["line_comments"] = line
         stats["block_comments"] = block
+        # only comment when there are comments: "no comments" is not evidence of a 0% habit
+        if line + block and first_row is not None:
+            self.rec("comment.block_ratio", int(round(100 * block / (block + line))), first_row)
         if self.is_python():
             try:
                 from .py_lang import analyze_ast
