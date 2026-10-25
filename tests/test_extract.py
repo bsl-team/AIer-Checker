@@ -446,3 +446,16 @@ def test_k01_block_comment_ratio_is_observed_only_when_comments_exist():
     assert mixed.value("comment.block_ratio") == 33          # 1 of 3 comments is a block comment
     assert mixed.stats["line_comments"] == 2 and mixed.stats["block_comments"] == 1
     assert extract(build_document("/* a */\n/* b */\nint main(){ return 0; }\n", "b.c")).value("comment.block_ratio") == 100
+
+
+def test_k07_typedef_and_using_aliases_become_types_not_variables():
+    r = roles(build_document("typedef struct { int x; } Foo;\nFoo f;\nint main(){return 0;}\n", "t.cpp"))
+    assert [n for _row, n in r["type"]] == ["Foo"] and [n for _row, n in r["variable"]] == ["f"]
+    r = roles(build_document("typedef int Bar;\nBar b;\nint main(){return 0;}\n", "t.cpp"))
+    assert "Bar" in [n for _row, n in r["type"]] and "Bar" not in [n for _row, n in r["variable"]]
+    r = roles(build_document("typedef int (*Fn)(void);\nFn call_it;\n", "t.cpp"))
+    assert "Fn" in [n for _row, n in r["type"]]
+    r = roles(build_document("using Handle = int;\nHandle h;\n", "t.cpp"))
+    assert "Handle" in [n for _row, n in r["type"]] and "Handle" not in [n for _row, n in r["variable"]]
+    # `using namespace std;` imports names, it does not introduce a type
+    assert roles(build_document("using namespace std;\nint main(){return 0;}\n", "t.cpp"))["type"] == []

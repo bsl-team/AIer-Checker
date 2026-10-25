@@ -123,7 +123,7 @@ def _clike_roles(doc: Document) -> dict[str, list[tuple[int, str]]]:
     body_ranges = _definition_ranges(doc)
     enum_ranges = _keyword_block_ranges(doc, ("enum",))
     struct_ranges = _keyword_block_ranges(doc, ("struct", "class", "union", "interface"))
-    typedef_ranges: set[int] = set()
+    alias_indices = _type_alias_indices(toks)
 
     for i, t in enumerate(toks):
         if t.kind != ID:
@@ -141,7 +141,7 @@ def _clike_roles(doc: Document) -> dict[str, list[tuple[int, str]]]:
         if _in_range(i, enum_ranges):
             add("constant", t.row, t.text)
             continue
-        if _in_range(i, typedef_ranges):
+        if i in alias_indices:
             add("type", t.row, t.text)
             continue
         if _is_arg_position(doc, i, body_ranges):
@@ -276,6 +276,45 @@ def _keyword_block_ranges(doc: Document, keywords) -> list[tuple[int, int]]:
                 if toks[j].kind == PUNCT and toks[j].text in ("(", ";"):
                     break
     return ranges
+
+
+def _type_alias_indices(toks: list[Token]) -> set[int]:
+    """Token indices of names introduced by ``typedef`` or ``using X = ...``.
+
+    Without these, ``typedef struct { int x; } Foo;`` left ``Foo`` unclassified and
+    ``typedef int Bar; Bar b;`` read ``Bar`` as a variable, so ``naming.type`` lost the
+    alias and ``naming.variable`` gained a type.
+    """
+    out: set[int] = set()
+    for i, t in enumerate(toks):
+        if t.kind != KW:
+            continue
+        if t.text == "typedef":
+            last = None
+            j = i + 1
+            while j < len(toks):
+                if toks[j].is_punct(";"):
+                    break
+                if toks[j].is_punct("{"):
+                    # ``typedef struct { int x; } Foo;`` - the ``;`` inside the body is not the end
+                    close = _match(toks, j)
+                    if close is None:
+                        break
+                    if close + 1 < len(toks) and toks[close + 1].kind == ID:
+                        last = close + 1
+                    j = close + 2
+                    continue
+                if toks[j].kind == ID:
+                    last = j
+                j += 1
+            if last is not None:
+                out.add(last)
+        elif t.text == "using":
+            nxt = toks[i + 1] if i + 1 < len(toks) else None
+            after = toks[i + 2] if i + 2 < len(toks) else None
+            if nxt is not None and nxt.kind == ID and after is not None and after.is_punct("="):
+                out.add(i + 1)  # `using namespace std;` is not an alias
+    return out
 
 
 def _in_range(i: int, ranges: list[tuple[int, int]]) -> bool:
