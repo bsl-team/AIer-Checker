@@ -11,11 +11,13 @@ license = { text = "MIT" }
 dependencies = []
 
 [project.scripts]
-cf = "cf.cli:main"
-cf-demo = "demo.app:main"
+cf-web = "cf.web:main"
 
 [tool.setuptools.packages.find]
-include = ["cf*", "demo*"]
+include = ["cf*"]
+
+[tool.setuptools.package-data]
+"cf.webui" = ["*.html", "*.css", "*.js"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

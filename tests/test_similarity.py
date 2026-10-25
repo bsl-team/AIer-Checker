@@ -139,20 +139,27 @@ def test_scores_survive_line_endings_and_encoding(tmp_path):
 
 
 def test_fingerprints_are_stable_across_processes(tmp_path):
-    manifest = tmp_path / "m.json"
-    (tmp_path / "a.cpp").write_text(BASE, encoding="utf-8")
-    (tmp_path / "b.cpp").write_text(renamed(BASE), encoding="utf-8")
-    manifest.write_text(json.dumps({"submissions": [
-        {"id": "a", "user": "u1", "path": "a.cpp"}, {"id": "b", "user": "u2", "path": "b.cpp"}]}),
-        encoding="utf-8")
+    a = tmp_path / "a.cpp"
+    b = tmp_path / "b.cpp"
+    a.write_text(BASE, encoding="utf-8")
+    b.write_text(renamed(BASE), encoding="utf-8")
+    script = """
+import json, sys
+from cf.similarity import Submission, find_duplicates
+
+subs = [Submission(sys.argv[1], "a", "u1"), Submission(sys.argv[2], "b", "u2")]
+report = find_duplicates(subs, min_tokens=40)
+print(json.dumps(report.to_dict(), sort_keys=True, ensure_ascii=False))
+"""
     out = []
-    for _ in range(2):
-        env = dict(os.environ, PYTHONHASHSEED=str(len(out)), PYTHONIOENCODING="utf-8")
-        r = subprocess.run([sys.executable, "-m", "cf.cli", "dup", "--manifest", str(manifest),
-                            "--min-tokens", "40", "--json", "--fail-on", "none"],
-                           capture_output=True, text=True, encoding="utf-8", cwd=os.getcwd(), env=env)
-        assert r.returncode == 0, r.stderr
-        out.append(json.loads(r.stdout))
+    for seed in ("0", "1"):
+        env = dict(os.environ, PYTHONHASHSEED=seed, PYTHONIOENCODING="utf-8")
+        result = subprocess.run(
+            [sys.executable, "-c", script, str(a), str(b)],
+            capture_output=True, text=True, encoding="utf-8", cwd=os.getcwd(), env=env,
+        )
+        assert result.returncode == 0, result.stderr
+        out.append(json.loads(result.stdout))
     assert out[0]["pairs"], "the pair should be found"
     assert out[0] == out[1]
 

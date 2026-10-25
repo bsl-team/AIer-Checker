@@ -1,0 +1,615 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AIer Checker · 教师审查台</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">A</div>
+        <div class="brand-copy">
+          <strong>AIer Checker</strong>
+          <span>代码风格审查台</span>
+        </div>
+      </div>
+
+      <nav class="side-nav" aria-label="主导航">
+        <button class="nav-item active" data-view="overview">
+          <span class="nav-icon">◫</span><span>比赛总览</span>
+        </button>
+        <button class="nav-item" data-view="students">
+          <span class="nav-icon">◉</span><span>学生审查</span>
+          <span class="nav-count" id="nav-student-count">0</span>
+        </button>
+        <button class="nav-item" data-view="duplicates">
+          <span class="nav-icon">⇄</span><span>查重</span>
+          <span class="nav-count" id="nav-duplicate-count">0</span>
+        </button>
+        <button class="nav-item" data-view="profiles">
+          <span class="nav-icon">▤</span><span>档案库</span>
+        </button>
+        <button class="nav-item" data-view="settings">
+          <span class="nav-icon">⚙</span><span>设置</span>
+        </button>
+        <button class="nav-item" data-view="help">
+          <span class="nav-icon">?</span><span>使用帮助</span>
+        </button>
+      </nav>
+
+      <div class="side-note">
+        <div class="side-note-title">本地审查</div>
+        <p>代码只在本机读取和分析，不会上传。查重与风格信号是线索，不是 AI 生成或抄袭结论。</p>
+      </div>
+
+      <div class="side-store">
+        <span>档案库</span>
+        <code id="side-store-path">—</code>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div class="topbar-title">
+          <span class="eyebrow">CONTEST REVIEW</span>
+          <h1 id="page-title">比赛总览</h1>
+        </div>
+        <div class="scan-bar">
+          <label class="path-field">
+            <span class="path-icon">⌂</span>
+            <input id="root-input" type="text" spellcheck="false"
+                   placeholder="例如 C:\Contest 或 ./Contest">
+          </label>
+          <button class="btn btn-primary" id="scan-btn">扫描文件夹</button>
+          <button class="btn btn-ghost" id="export-btn" disabled>导出报告</button>
+        </div>
+      </header>
+
+      <div class="view-wrap">
+        <!-- overview -->
+        <section class="view active" id="view-overview">
+          <div class="hero card">
+            <div class="hero-main">
+              <span class="hero-kicker">教师审查工作台</span>
+              <h2 id="hero-title">先扫描一场比赛，建立审查视图</h2>
+              <p id="hero-desc">输入比赛文件夹。系统会按学生拆分提交，检查同一位学生在一场比赛中是否存在多套风格、跨用户结构重复，以及和历史档案的偏离。</p>
+            </div>
+            <div class="hero-side">
+              <div class="hero-chip" id="hero-root">尚未扫描</div>
+              <div class="hero-chip subtle" id="hero-time">—</div>
+            </div>
+          </div>
+
+          <div class="stat-grid" id="overview-stats"></div>
+
+          <div class="grid-2">
+            <div class="card">
+              <div class="card-head">
+                <div>
+                  <h2>重点关注</h2>
+                  <p>按风格组、档案偏离和重复程度排序</p>
+                </div>
+                <span class="pill" id="attention-count">0 人</span>
+              </div>
+              <div id="attention-list" class="attention-list empty-block">
+                <p class="muted">扫描后显示需要优先人工复核的学生。</p>
+              </div>
+            </div>
+            <div class="card">
+              <div class="card-head">
+                <div>
+                  <h2>扫描信息</h2>
+                  <p>本场比赛的配置与告警</p>
+                </div>
+              </div>
+              <div id="scan-meta" class="meta-list empty-block">
+                <p class="muted">尚未扫描。</p>
+              </div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-head">
+              <div>
+                <h2>全部学生</h2>
+                <p>点击一行进入学生审查</p>
+              </div>
+              <div class="head-tools">
+                <input class="mini-input" id="overview-search" placeholder="搜索学生…">
+              </div>
+            </div>
+            <div id="overview-users" class="table-wrap empty-block">
+              <p class="muted">扫描后显示学生列表。</p>
+            </div>
+          </div>
+        </section>
+
+        <!-- students -->
+        <section class="view" id="view-students">
+          <div class="student-layout">
+            <aside class="card user-list-card">
+              <div class="card-head compact">
+                <div>
+                  <h2>学生</h2>
+                  <p id="student-list-count">0 位</p>
+                </div>
+              </div>
+              <input class="mini-input full" id="user-search" placeholder="搜索学生…">
+              <div id="user-list" class="user-list empty-block">
+                <p class="muted">扫描后显示学生。</p>
+              </div>
+            </aside>
+            <div id="student-detail" class="student-detail">
+              <div class="card empty-state">
+                <div class="empty-mark">◉</div>
+                <h2>选择一位学生</h2>
+                <p>左侧列表按关注等级和风格组排序。选中后可查看风格分组、文件证据、历史档案偏离与 57 个风格轴。</p>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- duplicates -->
+        <section class="view" id="view-duplicates">
+          <div class="stat-grid" id="duplicate-stats"></div>
+          <div class="card">
+            <div class="card-head">
+              <div>
+                <h2>重复对</h2>
+                <p>结构化 k-gram 证据；同题、跨用户为默认重点</p>
+              </div>
+              <div class="head-tools duplicate-tools">
+                <label class="check"><input type="checkbox" id="cross-only" checked> 只看跨用户</label>
+                <input class="mini-input" id="duplicate-search" placeholder="搜索学生 / 题目…">
+                <label class="score-filter">最低分
+                  <input type="range" id="min-score" min="0" max="100" value="50">
+                  <span id="min-score-label">50%</span>
+                </label>
+              </div>
+            </div>
+            <div id="duplicate-table" class="table-wrap empty-block">
+              <p class="muted">扫描后显示重复对。</p>
+            </div>
+          </div>
+          <div class="card" id="duplicate-warnings-card">
+            <div class="card-head">
+              <div>
+                <h2>查重告警</h2>
+                <p>短代码、跨语言、传递闭包等边界情况</p>
+              </div>
+            </div>
+            <div id="duplicate-warnings" class="warning-list empty-block">
+              <p class="muted">暂无。</p>
+            </div>
+          </div>
+        </section>
+
+        <!-- profiles -->
+        <section class="view" id="view-profiles">
+          <div class="card">
+            <div class="card-head">
+              <div>
+                <h2>历史档案库</h2>
+                <p>建议先用往期比赛建立基线，再审查本次比赛</p>
+              </div>
+              <div class="head-tools">
+                <button class="btn btn-ghost" id="refresh-profiles-btn">刷新</button>
+                <button class="btn btn-secondary" id="save-all-btn" disabled>保存本次全部学生</button>
+              </div>
+            </div>
+            <div class="store-strip">
+              <span>档案库路径</span>
+              <code id="profiles-store-path">—</code>
+            </div>
+            <div id="profile-table" class="table-wrap empty-block">
+              <p class="muted">档案库为空，或尚未扫描。</p>
+            </div>
+            <div class="notice">
+              <strong>为什么要先建档？</strong>
+              如果把本次比赛的文件直接存入档案，再拿同一份档案比较本次比赛，会出现“自己证明自己”的虚高一致性。建议用往期比赛建档，本次比赛只做审查。
+            </div>
+          </div>
+        </section>
+
+        <!-- settings -->
+        <section class="view" id="view-settings">
+          <div class="card settings-card">
+            <div class="card-head">
+              <div>
+                <h2>扫描设置</h2>
+                <p>修改后重新扫描生效</p>
+              </div>
+            </div>
+            <div class="settings-grid">
+              <label class="field">
+                <span>档案库路径</span>
+                <input type="text" id="setting-store" spellcheck="false" placeholder="留空使用默认档案库（~/.code-feature/profiles.json）">
+                <small>也可以设置环境变量 CF_STORE；启动服务时用 --store 可临时指定。修改后重新扫描生效。</small>
+              </label>
+              <label class="field">
+                <span>查重灵敏度</span>
+                <select id="setting-sensitivity">
+                  <option value="strict">严格：少而准</option>
+                  <option value="standard" selected>标准：平衡</option>
+                  <option value="loose">宽松：多召回</option>
+                </select>
+                <small>严格：Jaccard ≥ 60%；标准 ≥ 50%；宽松 ≥ 40%。</small>
+              </label>
+              <label class="field check-field">
+                <span>查重范围</span>
+                <label class="check"><input type="checkbox" id="setting-same-problem" checked> 只比较同一题目</label>
+                <label class="check"><input type="checkbox" id="setting-same-user" checked> 包含同一学生的文件</label>
+                <small>跨用户重复始终会被计算；关闭同题后 T1 与 T4 也可能进入候选。</small>
+              </label>
+              <label class="field">
+                <span>语言</span>
+                <select id="setting-language">
+                  <option value="auto" selected>自动检测</option>
+                  <option value="cpp">C++</option>
+                  <option value="c">C</option>
+                  <option value="python">Python</option>
+                  <option value="javascript">JavaScript</option>
+                  <option value="typescript">TypeScript</option>
+                  <option value="java">Java</option>
+                  <option value="go">Go</option>
+                  <option value="rust">Rust</option>
+                  <option value="csharp">C#</option>
+                  <option value="shell">Shell</option>
+                </select>
+                <small>通常保持自动检测；混合语言比赛不建议强制单一语言。</small>
+              </label>
+            </div>
+            <div class="settings-actions">
+              <button class="btn btn-primary" id="settings-scan-btn">用这些设置重新扫描</button>
+              <span class="muted" id="settings-note">设置会保存在本机浏览器。</span>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-head">
+              <div>
+                <h2>判定口径</h2>
+                <p>这套工具能做什么、不能做什么</p>
+              </div>
+            </div>
+            <div class="explain-grid">
+              <div><strong>多套风格</strong><p>同一学生的文件按风格特征聚类。只有组内足够一致、组间差异足够大时才标记，且至少需要 3 个文件。</p></div>
+              <div><strong>历史偏离</strong><p>与档案库中的本人历史风格比较。若档案包含本次文件，会明确提示“自证”并降低参考价值。</p></div>
+              <div><strong>结构查重</strong><p>抹掉改名、字面量和注释后比较 k-gram，只给行段证据，不展示完整原文。</p></div>
+              <div><strong>不是判决</strong><p>所有信号都只用于决定“先看哪几位学生”。AI 生成、抄袭与否必须由教师结合过程性证据判断。</p></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- help -->
+        <section class="view" id="view-help">
+          <div class="help-hero card">
+            <div class="help-hero-main">
+              <span class="hero-kicker">TEACHER GUIDE</span>
+              <h2>5 分钟看懂教师审查台</h2>
+              <p class="help-lead">输入一场比赛的文件夹，系统按学生拆分提交，分别检查“同一位学生是否出现多套风格”“提交之间是否有结构重复”“与本人历史档案是否偏离”。所有结果只用于决定先看谁、先看哪里，最终判断必须由教师完成。</p>
+              <div class="help-badges">
+                <span class="badge green">本地运行</span>
+                <span class="badge blue">不上传代码</span>
+                <span class="badge gray">不执行源码</span>
+                <span class="badge medium">线索不是判决</span>
+              </div>
+            </div>
+            <div class="help-hero-side">
+              <span>启动方式</span>
+              <code>python -m cf.web --open</code>
+              <small>安装后也可使用 <code>cf-web --open</code></small>
+              <small>默认地址 http://127.0.0.1:8765</small>
+            </div>
+          </div>
+
+          <div class="grid-2">
+            <div class="card">
+              <div class="card-head">
+                <div>
+                  <h2>快速开始</h2>
+                  <p>先把文件夹放对，再扫描</p>
+                </div>
+                <span class="pill">3 步</span>
+              </div>
+              <ol class="help-steps">
+                <li>
+                  <span class="help-step-no">1</span>
+                  <div><strong>准备比赛文件夹</strong><p>每个学生一个一级子文件夹，文件名建议使用题号，例如 <code>T1.cpp</code>、<code>T2.cpp</code>。可以在学生文件夹内再分轮次，系统会把嵌套路径作为题目名。</p></div>
+                </li>
+                <li>
+                  <span class="help-step-no">2</span>
+                  <div><strong>填写绝对路径并扫描</strong><p>在页面顶部输入 <code>C:\Contest</code> 或 <code>/home/teacher/Contest</code>，点“扫描文件夹”。路径会保存在本机浏览器里，下次打开自动带回。</p></div>
+                </li>
+                <li>
+                  <span class="help-step-no">3</span>
+                  <div><strong>从“重点关注”开始</strong><p>先看高关注与建议复核的学生，再打开学生详情核对风格组、历史偏离和重复证据。不要只看一个分数就下结论。</p></div>
+                </li>
+              </ol>
+            </div>
+
+            <div class="card">
+              <div class="card-head">
+                <div>
+                  <h2>目录示例</h2>
+                  <p>系统按一级子目录识别学生</p>
+                </div>
+              </div>
+              <pre class="help-tree">Contest/
+├─ User1/
+│  ├─ T1.cpp
+│  ├─ T2.cpp
+│  ├─ T3.cpp
+│  └─ T4.cpp
+├─ User2/
+│  ├─ T1.cpp
+│  ├─ T2.cpp
+│  ├─ T3.cpp
+│  └─ T4.cpp
+└─ User3/
+   └─ round1/T1.py</pre>
+              <p class="help-caption">支持的源码扩展名：<code>.c .h .cc .cpp .cxx .hpp .hh .hxx .ino .go .js .jsx .mjs .cjs .ts .tsx .java .rs .cs .py .pyw .pyi .sh .bash .zsh</code>。隐藏目录、依赖目录和构建目录会自动跳过。</p>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-head">
+              <div>
+                <h2>推荐工作流</h2>
+                <p>先建立历史基线，再审查本次比赛，结论最可靠</p>
+              </div>
+              <span class="pill">6 步</span>
+            </div>
+            <div class="help-flow">
+              <div class="help-flow-step">
+                <b>01</b>
+                <strong>扫描往期比赛</strong>
+                <p>选一场旧比赛，确认学生和文件都识别正确。</p>
+              </div>
+              <div class="help-flow-step">
+                <b>02</b>
+                <strong>批量存入档案</strong>
+                <p>在档案库页点“保存本次全部学生”，通常选“合并”。</p>
+              </div>
+              <div class="help-flow-step">
+                <b>03</b>
+                <strong>扫描本次比赛</strong>
+                <p>换成本次 Contest 路径重新扫描，历史档案会自动参与对照。</p>
+              </div>
+              <div class="help-flow-step">
+                <b>04</b>
+                <strong>看重点关注</strong>
+                <p>按关注等级、多套风格、历史偏离和重复对排序。</p>
+              </div>
+              <div class="help-flow-step">
+                <b>05</b>
+                <strong>核对证据</strong>
+                <p>打开风格组、57 轴特征、文件行号和查重行段，不只看总分。</p>
+              </div>
+              <div class="help-flow-step">
+                <b>06</b>
+                <strong>导出 Markdown</strong>
+                <p>报告只含摘要、关注原因和重复对，不含完整源码。</p>
+              </div>
+            </div>
+            <div class="notice">
+              <strong>为什么不能先存本次、再看本次？</strong>
+              如果档案里已经包含本次文件，再拿同一份档案比较本次提交，会出现“自己证明自己”的虚高一致性。界面会显示“档案含本次 · 参考”，这时历史一致性不能作为关注依据。
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-head">
+              <div>
+                <h2>页面导航</h2>
+                <p>每个页面解决一个具体问题</p>
+              </div>
+            </div>
+            <div class="help-pages">
+              <div class="help-page-item">
+                <span class="help-page-icon">◫</span>
+                <div><strong>比赛总览</strong><p>看全局统计、重点关注名单和全部学生。适合决定审查顺序。</p></div>
+              </div>
+              <div class="help-page-item">
+                <span class="help-page-icon">◉</span>
+                <div><strong>学生审查</strong><p>看单个学生的风格分组、本次一致性、历史档案对照、57 个风格轴和证据行号。</p></div>
+              </div>
+              <div class="help-page-item">
+                <span class="help-page-icon">⇄</span>
+                <div><strong>查重</strong><p>按题目比较结构相似度，默认只看跨用户。点“证据”打开左右并排的行段。</p></div>
+              </div>
+              <div class="help-page-item">
+                <span class="help-page-icon">▤</span>
+                <div><strong>档案库</strong><p>查看已保存的学生、样本数与更新时间；批量保存本次学生。</p></div>
+              </div>
+              <div class="help-page-item">
+                <span class="help-page-icon">⚙</span>
+                <div><strong>设置</strong><p>调整档案库路径、查重灵敏度、是否同题比较、是否包含同用户，然后重新扫描。</p></div>
+              </div>
+              <div class="help-page-item">
+                <span class="help-page-icon">?</span>
+                <div><strong>使用帮助</strong><p>就是你正在看的这一页。建议首次使用时完整读一遍。</p></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="grid-2">
+            <div class="card">
+              <div class="card-head">
+                <div>
+                  <h2>核心概念</h2>
+                  <p>先理解这些词，再看数字</p>
+                </div>
+              </div>
+              <dl class="help-concepts">
+                <dt>多套风格</dt>
+                <dd>同一学生的文件按 57 个风格轴的分布分组。只有组内足够接近、组间差异足够大时才标记，至少 3 个文件才做稳定判断。</dd>
+                <dt>关注等级</dt>
+                <dd><span class="badge high">高关注</span> 表示同时出现较强信号，建议优先看；<span class="badge medium">建议复核</span> 表示值得抽查；<span class="badge low">常规</span> 不代表“没有问题”，只表示当前没有触发优先规则。</dd>
+                <dt>历史档案一致性</dt>
+                <dd>本次提交与本人过去档案的接近程度。档案应当来自往期比赛；若含本次文件，会因自证而虚高。</dd>
+                <dt>Jaccard / Containment</dt>
+                <dd>都是 0–100% 的结构重合指标。Jaccard 看双方整体重合，Containment 看一方有多少被另一方覆盖；两者都要结合共享 token 数和行段证据看。</dd>
+                <dt>跨用户 / 同用户重复</dt>
+                <dd>跨用户是不同学生之间的重复，优先复核；同用户是本人多份提交之间的结构重复，可能是模板或复用，也可能是题目本身相似。</dd>
+                <dt>行段证据</dt>
+                <dd>系统只展示重合片段附近的行号与 token 数，不把整份源码放进报告。证据用于定位，不等于抄袭结论。</dd>
+              </dl>
+            </div>
+
+            <div class="card">
+              <div class="card-head">
+                <div>
+                  <h2>三个示例</h2>
+                  <p>数字应该怎样读</p>
+                </div>
+              </div>
+              <div class="help-example">
+                <strong>例 1：一个学生出现 2 组风格</strong>
+                <div class="help-example-groups">
+                  <span class="mini-badge green">组 A：T1 / T2</span>
+                  <span class="mini-badge violet">组 B：T3 / T4</span>
+                </div>
+                <p>组内平均 96%，组间平均 54%，组间差异 42%。这说明本次提交内部存在可区分风格，应打开源码核对是否有模板、代写或历史版本混入。</p>
+              </div>
+              <div class="help-example">
+                <strong>例 2：一对跨用户重复</strong>
+                <div class="help-example-metrics">
+                  <span>Jaccard <b>86%</b></span>
+                  <span>Containment <b>93%</b></span>
+                  <span>共享 <b>22 tokens</b></span>
+                </div>
+                <p>行段证据显示 <code>User1/T2.cpp</code> 第 12–18 行与 <code>User2/T2.cpp</code> 第 9–15 行重合。先核对题目是否本身包含公共模板，再和学生过程记录对照。</p>
+              </div>
+              <div class="help-example">
+                <strong>例 3：合并档案</strong>
+                <div class="help-example-metrics">
+                  <span>首次建档 <b>4 个样本</b></span>
+                  <span>合并新比赛 <b>+2</b></span>
+                  <span>再次保存 <b>+0</b></span>
+                </div>
+                <p>“合并”会跳过档案里已经存在的文件路径，所以同一场比赛重复保存不会重复计数。需要完全重建时才选“仅用本次覆盖”。</p>
+              </div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-head">
+              <div>
+                <h2>判定口径与边界</h2>
+                <p>这些限制是设计选择，不是故障</p>
+              </div>
+            </div>
+            <div class="help-caution-grid">
+              <div><strong>不是 AI 生成概率</strong><p>“多套风格”只是风格分布差异的统计线索，不能证明使用了 AI。</p></div>
+              <div><strong>不是抄袭判决</strong><p>结构重合可能来自公共模板、题目约束或教学示例，必须人工核对。</p></div>
+              <div><strong>样本少时不强判</strong><p>只有 1–2 个文件时只能提示差异，不能稳定分组；共同特征不足时会显示“证据不足”。</p></div>
+              <div><strong>默认只比较同题</strong><p>避免 T1 与 T4 误配。若题目命名不一致，可在设置里关闭同题限制，但误报会增加。</p></div>
+              <div><strong>短提交会被跳过</strong><p>默认少于 80 token 的提交不参与查重，页面会显示 too-short 告警。</p></div>
+              <div><strong>历史档案可能自证</strong><p>档案包含本次文件时，一致性会虚高；请先用往期比赛建档，再审查本次比赛。</p></div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-head">
+              <div>
+                <h2>常见问题</h2>
+                <p>先检查这几项，再判断是不是工具出错</p>
+              </div>
+            </div>
+            <div class="help-faq">
+              <details>
+                <summary>为什么查重页没有结果？</summary>
+                <p>先确认“只看跨用户”和最低分过滤是否过严；再看查重告警是否提示 too-short。默认只比较同一题目，如果各学生的文件名不一致，也会没有候选对。</p>
+              </details>
+              <details>
+                <summary>为什么只显示“建议复核”，不直接告诉我是不是 AI？</summary>
+                <p>因为风格特征无法单独证明生成方式。工具把多套风格、历史偏离和重复信号合并成关注等级，只负责排序；AI 使用与抄袭结论必须由教师结合过程性证据判断。</p>
+              </details>
+              <details>
+                <summary>为什么学生显示“未建档”？</summary>
+                <p>档案库里还没有这个学生的历史样本。先扫描往期比赛，在“学生审查”里点“存入档案”，或在“档案库”里批量保存。</p>
+              </details>
+              <details>
+                <summary>“合并”和“仅用本次覆盖”有什么区别？</summary>
+                <p>合并只追加档案中不存在的文件，保留历史样本，适合日常建档；覆盖会丢弃旧样本，只用本次文件重建，适合确认旧档案错误时使用。</p>
+              </details>
+              <details>
+                <summary>怎样更换档案库路径？</summary>
+                <p>在“设置”里填写新的 JSON 路径后重新扫描；也可以在启动服务时用 <code>--store</code> 临时指定。留空则使用默认的 <code>~/.code-feature/profiles.json</code>。</p>
+              </details>
+              <details>
+                <summary>扫描很慢怎么办？</summary>
+                <p>查重随文件数增长较快。可以先只放本次需要审查的学生，或提高查重灵敏度要求、减少同用户比较；大文件夹建议分批次扫描。</p>
+              </details>
+              <details>
+                <summary>代码会被上传或执行吗？</summary>
+                <p>不会。服务只监听本机，读取教师选择的文件夹和档案库，做静态解析；不联网上传、不运行学生代码，也不在导出的 Markdown 里放完整源码。</p>
+              </details>
+            </div>
+          </div>
+
+          <div class="card help-footer-note">
+            <strong>隐私与责任</strong>
+            <p>审查数据留在本机。请把风格偏离、重复对和关注等级当作“下一步看哪里”的线索，而不是对学生的结论。涉及学术诚信判断时，应结合题目约束、提交过程、版本记录和当面沟通。</p>
+          </div>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <!-- evidence / source drawer -->
+  <div class="drawer hidden" id="drawer" aria-hidden="true">
+    <div class="drawer-backdrop" data-close-drawer></div>
+    <aside class="drawer-panel" role="dialog" aria-modal="true" aria-labelledby="drawer-title">
+      <header class="drawer-head">
+        <div>
+          <span class="eyebrow" id="drawer-kicker">EVIDENCE</span>
+          <h2 id="drawer-title">重复证据</h2>
+        </div>
+        <button class="icon-btn" data-close-drawer aria-label="关闭">×</button>
+      </header>
+      <div class="drawer-body" id="drawer-body"></div>
+    </aside>
+  </div>
+
+  <!-- save profile dialog -->
+  <div class="modal hidden" id="save-modal" aria-hidden="true">
+    <div class="modal-backdrop" data-close-modal></div>
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="save-modal-title">
+      <header>
+        <span class="eyebrow">PROFILE</span>
+        <h2 id="save-modal-title">存入历史档案</h2>
+      </header>
+      <p id="save-modal-desc"></p>
+      <div class="save-options">
+        <button class="save-option" data-save-mode="merge">
+          <strong>合并到已有档案 <span class="tag">推荐</span></strong>
+          <span>只追加档案中没有的文件，保留历史样本，不会重复计数。</span>
+        </button>
+        <button class="save-option danger" data-save-mode="replace">
+          <strong>仅用本次覆盖</strong>
+          <span>重建该学生的档案。会丢失之前保存的历史样本，请谨慎使用。</span>
+        </button>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" data-close-modal>取消</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast hidden" id="toast" role="status"></div>
+  <div class="loading hidden" id="loading">
+    <div class="loading-card">
+      <div class="spinner"></div>
+      <strong id="loading-title">正在扫描与分析…</strong>
+      <span>读取文件、提取风格、运行查重</span>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

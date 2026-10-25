@@ -1,10 +1,8 @@
-import json
 import pathlib
 import re
 
 import pytest
 
-from cf.cli import main, split_msg_lang
 from cf.consistency import analyze
 from cf.document import build_document
 from cf.extract import extract
@@ -15,7 +13,7 @@ from cf.store import ProfileStore, StoreError
 from tests.util import read_sample, sample_path
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
-SOURCE_DIRS = ("cf", "demo")
+SOURCE_DIRS = ("cf",)
 # keys built from a variable or prefix at runtime, not a literal t("...")
 DYNAMIC_KEYS = {"c.created", "c.updated"}  # chosen by profile add/update verb
 
@@ -40,12 +38,6 @@ def english():
     set_locale("en")
     yield
     set_locale("en")
-
-
-def run(capsys, argv):
-    code = main(argv)
-    cap = capsys.readouterr()
-    return code, cap.out, cap.err
 
 
 def test_every_message_has_both_languages():
@@ -113,61 +105,6 @@ def test_store_errors_are_localised(tmp_path):
     with pytest.raises(StoreError) as exc:
         store.require("ghost")
     assert "没有用户" in str(exc.value)
-
-
-def test_cli_messages_use_the_flag(capsys, tmp_path):
-    store = str(tmp_path / "profiles.json")
-    _code, out, _err = run(capsys, ["-L", "zh", "extract", sample_path("py_default.py"), "--store", store])
-    assert "档案：" in out and "置信度" in out
-    _code, out, _err = run(capsys, ["extract", sample_path("py_default.py"), "--store", store])
-    assert "profile:" in out
-
-
-def test_msg_lang_flag_is_accepted_anywhere(capsys):
-    code_a, out_a, _ = run(capsys, ["-L", "zh", "rules"])
-    code_b, out_b, _ = run(capsys, ["rules", "-L", "zh"])
-    assert code_a == code_b == 0
-    assert out_a == out_b
-    assert "会改写" in out_a
-
-
-def test_split_msg_lang_forms():
-    assert split_msg_lang(["-L", "zh", "rules"]) == (["rules"], "zh")
-    assert split_msg_lang(["rules", "--msg-lang=zh"]) == (["rules"], "zh")
-    assert split_msg_lang(["rules"]) == (["rules"], None)
-
-
-def test_env_var_selects_locale(capsys, monkeypatch):
-    monkeypatch.setenv("CF_LANG", "zh")
-    code, out, err = run(capsys, ["languages"])
-    assert code == 0, err
-    assert "说明" in out
-
-
-def test_help_text_follows_the_locale(capsys):
-    with pytest.raises(SystemExit):
-        main(["-L", "zh", "--help"])
-    out = capsys.readouterr().out
-    assert "代码风格内核" in out and "示例" in out
-    with pytest.raises(SystemExit):
-        main(["--help"])
-    english = capsys.readouterr().out
-    assert "Code style kernel" in english and "examples:" in english
-
-
-def test_format_error_output_is_localised(capsys, tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    run(capsys, ["-L", "zh", "profile", "add", "bin", sample_path("cpp_knr.cpp"), "--store", str(tmp_path / "p.json")])
-    code, out, err = run(capsys, ["-L", "zh", "format", sample_path("cpp_allman.cpp"), "--user", "ghost", "--store", str(tmp_path / "p.json")])
-    assert code == 2
-    assert "没有用户" in err
-
-
-def test_json_output_stays_language_free(capsys, tmp_path):
-    _code, out, _err = run(capsys, ["-L", "zh", "check", sample_path("mixed.cpp"), "--json"])
-    data = json.loads(out)
-    assert {"score", "findings", "files", "rules"} <= set(data)
-    assert all(isinstance(f["rule"], str) and f["rule"] == f["rule"].encode("ascii").decode() for f in data["findings"])
 
 
 def test_public_api_exposes_locale_helpers():
