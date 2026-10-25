@@ -137,3 +137,15 @@ def test_comma_join_against_a_profile():
     rep = analyze([off], baseline=base, min_evidence=1)
     hits = findings(rep, "statement.comma_join", kind="against-profile")
     assert hits and hits[0].severity == "low"
+
+
+def test_k08_min_evidence_also_gates_against_profile_findings():
+    baseline = build_document(
+        "int main(){\n    ios::sync_with_stdio(0); cin.tie(0), cout.tie(0);\n    return 0;\n}\n", "b.cpp")
+    profile = extract(baseline)
+    off = build_document(
+        "int main(){\n    int q=1;\n    ios::sync_with_stdio(0); cin.tie(0); cout.tie(0);\n    return 0;\n}\n", "o.cpp")
+    # the deviating file has two comma-join observations
+    assert [f.rule for f in analyze([off], baseline=profile, min_evidence=2).findings
+            if f.kind == "against-profile"] == ["statement.comma_join"]
+    assert analyze([off], baseline=profile, min_evidence=3).findings == []

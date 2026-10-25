@@ -252,6 +252,9 @@ def _profile_findings(doc, prof: Profile, shared: Profile, min_evidence) -> list
         feat = prof.features.get(key)
         if feat is None or feat.total == 0 or feat.value is None:
             continue
+        if key not in STRICT_ANY_DEVIATION and feat.total < min_evidence:
+            # same bar as the intra-file pass: a single deviating row is not a style claim
+            continue
         if feat.value == base.value:
             continue
         if feat.agreement < 0.6:
