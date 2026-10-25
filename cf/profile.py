@@ -169,7 +169,9 @@ class Feature:
             return v == "true"
         if kind == "int":
             try:
-                return int(float(v))
+                # ``>79`` is how an over-long row is recorded: a deviating *value* for the checker,
+                # but the number a formatter needs is still 79.
+                return int(float(str(v).lstrip(">")))
             except ValueError:
                 return None
         return v

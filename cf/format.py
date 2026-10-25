@@ -174,12 +174,14 @@ class Formatter:
     def flag(self, key: str) -> None:
         self.changed_rules.add(key)
 
-    def _number(self, key: str, default: int) -> int:
+    def _number(self, key: str, default: int, lo: int = 1, hi: int = 24) -> int:
+        """Read a numeric rule value.  ``width.limit`` may be ``\">79\"``: that leading ``>`` marks
+        rows that exceeded the limit, and the limit itself is what the formatter needs."""
         try:
-            n = int(self.value(key, default))
+            n = int(str(self.value(key, default)).lstrip(">"))
         except (TypeError, ValueError):
             return default
-        return n if 1 <= n <= 24 else default
+        return n if lo <= n <= hi else default
 
     def _quote_style(self) -> str | None:
         """Quote conversion needs a real observation: rewriting literals is not pure layout.
@@ -767,7 +769,7 @@ class Formatter:
 
     # -- render ---------------------------------------------------------
     def _render(self, pieces: list[Piece]) -> list[str]:
-        limit = self._number("width.limit", 100) if self.enabled("width.limit") else None
+        limit = self._number("width.limit", 100, 20, 240) if self.enabled("width.limit") else None
         lines: list[str] = []
         for piece in pieces:
             if piece.skip:

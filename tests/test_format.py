@@ -450,3 +450,23 @@ def test_k03_pointer_rule_still_hugs_the_name():
     out = fmt(src, "t.cpp", profile)
     assert "int *p;" in out, out
     assert token_identity(src, "t.cpp") == token_identity(out, "t.cpp")
+
+
+def test_k04_width_limit_above_24_is_honoured():
+    src = "int main() {\n    int result = compute(first_value, second_value, third_value, fourth_value);\n}\n"
+    profile = profile_of(**{"width.limit": 60, "indent.type": "space", "indent.size": 4})
+    res = format_source(src, "k04.cpp", profile, FormatOptions())
+    assert not res.error and res.changed and "width.limit" in res.applied, res
+    assert max(len(l) for l in res.text.splitlines()) <= 60, res.text
+    assert token_identity(src, "k04.cpp") == token_identity(res.text, "k04.cpp")
+    again = format_source(res.text, "k04.cpp", profile, FormatOptions())
+    assert again.text == res.text, "wrapping must be a fixed point"
+
+
+def test_k04_an_over_long_row_is_recorded_as_a_deviation_but_still_reads_as_a_number():
+    from cf.profile import Profile
+    rows = "".join("    v%d = %d;\n" % (i, i) for i in range(60))
+    src = "int main(){\n%s    %s;\n    return 0;\n}\n" % (rows, "x" * 400)
+    profile = extract(build_document(src, "t.cpp"))
+    assert profile.feature("width.limit").counts.get(">79") == 1
+    assert profile.value("width.limit") == 79  # not None: ``>79`` still names the limit 79
