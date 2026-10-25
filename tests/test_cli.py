@@ -278,3 +278,22 @@ def test_check_can_use_a_profile_file(capsys, tmp_path):
     code, out, _ = run(capsys, ["check", sample_path("cpp_knr.cpp"), "--profile", str(prof)])
     assert code == 1
     assert "differs from profile" in out
+
+
+def test_k05_format_json_from_stdin_emits_only_json(capsys, monkeypatch, store):
+    run(capsys, ["profile", "add", "bin", sample_path("cpp_allman.cpp"), "--store", store])
+    src = "int main(){\n    vector <int> a;\n    return 0;\n}\n"
+    monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(io.BytesIO(src.encode())))
+    code, out, err = run(capsys, ["format", "--user", "bin", "--store", store, "--json"])
+    assert code == 0, err
+    payload = json.loads(out)                    # stdout is one JSON document, no code printed first
+    entry = payload["files"][0]
+    assert entry["text"].lstrip().startswith("int main()\n{") or "int main" in entry["text"]
+    assert set(entry) >= {"file", "changed", "applied", "skipped", "error", "text"}
+
+
+def test_k05_format_from_a_file_does_not_put_source_in_the_json(capsys, store):
+    run(capsys, ["profile", "add", "bin", sample_path("cpp_allman.cpp"), "--store", store])
+    _code, out, _err = run(capsys, ["format", "--user", "bin", "--store", store,
+                                    sample_path("cpp_knr.cpp"), "--json"])
+    assert "text" not in json.loads(out)["files"][0]

@@ -269,9 +269,11 @@ def cmd_format(args) -> int:
         if res.error:
             refused.append(path)
     from_stdin = len(meta) == 1 and meta[0][0] == "<stdin>"
-    if from_stdin and not args.check:
+    # ``--json`` owns stdout: the formatted text travels inside the payload instead of being
+    # printed in front of it, otherwise the stream would not be a single JSON document.
+    if from_stdin and not args.check and not args.json:
         sys.stdout.write(results[0][1].text)
-    elif args.write:
+    elif args.write and not from_stdin:
         for path, res, enc, _before in results:
             if res.changed and not res.error:
                 write_source(path, res.text, enc)
@@ -287,6 +289,7 @@ def cmd_format(args) -> int:
                     "applied": res.applied,
                     "skipped": res.skipped,
                     "error": res.error,
+                    **({"text": res.text} if from_stdin else {}),
                 }
                 for path, res, _enc, _before in results
             ],
