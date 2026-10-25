@@ -6,13 +6,13 @@ Messages, reports and ``--help`` come out in English or Chinese: ``-L zh`` /
 from __future__ import annotations
 
 import argparse
-import codecs
 import glob
 import json
 import os
 import sys
 
 from . import __version__
+from .audit import build_audit
 from .consistency import analyze
 from .document import build_document
 from .extract import extract_all
@@ -21,61 +21,32 @@ from .i18n import ENV_VAR, get_locale, set_locale, t
 from .profile import FEATURE_SPECS, Profile
 from .report import (
     render_consistency,
+    render_duplicates,
     render_format,
     render_languages,
     render_profile,
     render_rules,
+    render_similarity,
+    render_audit,
     render_store,
     rule_summary,
 )
+from .similarity import (
+    Submission,
+    SimilarityError,
+    compare_documents,
+    find_duplicates,
+    load_manifest,
+)
+from .sources import ENCODINGS, InputError, decode_bytes, read_bytes, read_source, write_source
 from .store import ProfileStore, StoreError
 from .tokens import SPEC_BY_NAME
 
 EXIT_OK = 0
 EXIT_FINDINGS = 1
 EXIT_ERROR = 2
-ENCODINGS = ("utf-8", "gbk", "cp936", "big5", "cp1252", "latin-1")
 SEVERITY_RANK = {"none": -1, "low": 0, "medium": 1, "high": 2}
 DEFAULT_STORE = os.path.join("~", ".code-feature", "profiles.json")
-
-
-class InputError(Exception):
-    pass
-
-
-def decode_bytes(raw: bytes) -> tuple[str, str]:
-    """Decode source text and remember the encoding so an in-place rewrite is faithful.
-
-    BOMs are detected explicitly: decoding a BOM-less file with utf-8-sig and writing it back
-    would add a BOM that was never there.
-    """
-    if raw.startswith(codecs.BOM_UTF8):
-        return raw[3:].decode("utf-8", errors="replace"), "utf-8-sig"
-    if raw[:2] in (b"\xff\xfe", b"\xfe\xff"):
-        return raw.decode("utf-16", errors="replace"), "utf-16"
-    for enc in ENCODINGS:
-        try:
-            return raw.decode(enc), enc
-        except UnicodeDecodeError:
-            continue
-    return raw.decode("latin-1", errors="replace"), "latin-1"
-
-
-def read_source(path: str) -> tuple[str, str]:
-    try:
-        with open(path, "rb") as fh:
-            raw = fh.read()
-    except OSError as exc:
-        raise InputError(t("e.read_file", path=path, error=exc.strerror or exc)) from exc
-    return decode_bytes(raw)
-
-
-def write_source(path: str, text: str, encoding: str) -> None:
-    try:
-        with open(path, "wb") as fh:
-            fh.write(text.encode(encoding, errors="replace"))
-    except OSError as exc:
-        raise InputError(t("e.write_file", path=path, error=exc.strerror or exc)) from exc
 
 
 def expand_paths(paths: list[str]) -> list[str]:
@@ -313,6 +284,108 @@ def cmd_format(args) -> int:
     return EXIT_OK
 
 
+def cmd_dup(args) -> int:
+    subs = _submissions_from_args(args)
+    report = find_duplicates(
+        subs,
+        min_jaccard=args.min_score,
+        min_containment=args.min_containment,
+        min_shared=args.min_shared,
+        min_tokens=args.min_tokens,
+        same_problem=not args.all_problems,
+        same_language=not args.cross_language,
+        include_same_user=not args.cross_user,
+        include_cross_user=not args.same_user,
+        max_candidates=args.max_candidates,
+        evidence=args.evidence,
+        k=args.k,
+        window=args.window,
+        winnow=not args.no_winnow,
+        keep_common=args.keep_common,
+    )
+    if args.json:
+        print(json.dumps(report.to_dict(), indent=2, ensure_ascii=False))
+    else:
+        print(render_duplicates(report, top=args.top, show_all=args.all))
+    policy = args.fail_on or ("cross-user" if args.manifest else "any")
+    if policy == "none" or not report.pairs:
+        return EXIT_OK
+    if policy == "any":
+        return EXIT_FINDINGS
+    return EXIT_FINDINGS if any(p.cross_user for p in report.pairs) else EXIT_OK
+
+
+def cmd_similar(args) -> int:
+    paths = expand_paths(list(args.files or []))
+    if len(paths) != 2:
+        raise InputError(t("e.similar_two", count=len(paths)))
+    docs = []
+    for path in paths:
+        text, _enc = read_source(path)
+        docs.append(build_document(text, path, _spec_for(args.lang)))
+    sim = compare_documents(
+        docs[0], docs[1], k=args.k, window=args.window, min_shared=args.min_shared,
+        min_tokens=args.min_tokens, winnow=not args.no_winnow, evidence=args.evidence,
+        min_jaccard=args.min_score, min_containment=args.min_containment,
+    )
+    if args.json:
+        print(json.dumps({"pair": sim.to_dict()}, indent=2, ensure_ascii=False))
+    else:
+        print(render_similarity(sim, evidence_limit=args.evidence))
+    return EXIT_OK
+
+
+def _spec_for(lang: str | None):
+    if not lang:
+        return None
+    if lang not in SPEC_BY_NAME:
+        raise InputError(t("e.unknown_lang", name=repr(lang), options=", ".join(sorted(SPEC_BY_NAME))))
+    return SPEC_BY_NAME[lang]
+
+
+def _submissions_from_args(args) -> list[Submission]:
+    """A manifest carries user/problem metadata; bare file paths all belong to ``unknown``."""
+    if getattr(args, "manifest", None):
+        return load_manifest(args.manifest)
+    paths = expand_paths(list(args.files or []))
+    if not paths:
+        raise InputError(t("e.dup_no_inputs"))
+    return [Submission(path=p, user="unknown") for p in sorted(paths)]
+
+
+def cmd_audit(args) -> int:
+    subs = _submissions_from_args(args)
+    store = ProfileStore(args.store)
+    report = build_audit(
+        subs,
+        store=store,
+        signals=args.signals,
+        min_evidence=args.min_evidence,
+        min_jaccard=args.min_score,
+        min_containment=args.min_containment,
+        min_shared=args.min_shared,
+        min_tokens=args.min_tokens,
+        same_problem=not args.all_problems,
+        same_language=not args.cross_language,
+        evidence=args.evidence,
+        k=args.k,
+        window=args.window,
+        winnow=not args.no_winnow,
+        keep_common=args.keep_common,
+    )
+    if args.json:
+        print(json.dumps(report.to_dict(), indent=2, ensure_ascii=False))
+    else:
+        print(render_audit(report))
+    if args.fail_on == "none":
+        return EXIT_OK
+    if args.fail_on == "any" and (report.duplicates.pairs or report.style_deviations or report.external_signals):
+        return EXIT_FINDINGS
+    if report.has_cross_user_duplicate:
+        return EXIT_FINDINGS
+    return EXIT_OK
+
+
 def cmd_rules(args) -> int:
     print(render_rules())
     return EXIT_OK
@@ -335,6 +408,8 @@ EPILOG = {
         "  cf format --user bin --write src/*.cpp           reformat in place\n"
         "  cf format --profile bin.json < main.c            read stdin, write stdout\n"
         "  cf -L zh check src/*.py                          report in Chinese\n"
+        "  cf dup --manifest subs.json                      find cross-user duplicates\n"
+        "  cf similar alice.cpp bob.cpp                     score one pair\n"
     ),
     "zh": (
         "示例：\n"
@@ -345,6 +420,8 @@ EPILOG = {
         "  cf format --user bin --write src/*.cpp           就地格式化\n"
         "  cf format --profile bin.json < main.c            标准输入进、标准输出出\n"
         "  cf -L zh check src/*.py                          用中文输出提示\n"
+        "  cf dup --manifest subs.json                      在多用户提交里查找重复\n"
+        "  cf similar alice.cpp bob.cpp                     只比较一对文件\n"
     ),
 }
 
@@ -439,6 +516,74 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--eol", choices=("keep", "lf", "crlf"), default="keep", help=t("h.eol"))
     p.set_defaults(func=cmd_format)
 
+    p = sub.add_parser("dup", help=t("h.lh.dup"),
+                       description=t("h.dup.summary"),
+                       formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("files", nargs="*", help=t("h.dup.files"))
+    p.add_argument("--manifest", help=t("h.dup.manifest"))
+    p.add_argument("--store", help=t("h.store", default=DEFAULT_STORE))
+    p.add_argument("--json", action="store_true", help=t("h.json"))
+    p.add_argument("--min-score", type=float, default=0.5, help=t("h.dup.min_score"))
+    p.add_argument("--min-containment", type=float, default=0.8, help=t("h.dup.min_containment"))
+    p.add_argument("--min-shared", type=int, default=3, help=t("h.dup.min_shared"))
+    p.add_argument("--min-tokens", type=int, default=80, help=t("h.dup.min_tokens"))
+    p.add_argument("--k", type=int, default=7, help=t("h.dup.k"))
+    p.add_argument("--window", type=int, default=4, help=t("h.dup.window"))
+    p.add_argument("--no-winnow", action="store_true", help=t("h.dup.no_winnow"))
+    p.add_argument("--keep-common", action="store_true", help=t("h.dup.keep_common"))
+    group = p.add_mutually_exclusive_group()
+    group.add_argument("--cross-user", action="store_true", help=t("h.dup.cross_user"))
+    group.add_argument("--same-user", action="store_true", help=t("h.dup.same_user"))
+    p.add_argument("--all-problems", action="store_true", help=t("h.dup.all_problems"))
+    p.add_argument("--cross-language", action="store_true", help=t("h.dup.cross_language"))
+    p.add_argument("--max-candidates", type=int, help=t("h.dup.max_candidates"))
+    p.add_argument("--evidence", type=int, default=3, help=t("h.dup.evidence"))
+    p.add_argument("--top", type=int, default=50, help=t("h.dup.top"))
+    p.add_argument("--all", action="store_true", help=t("h.dup.all"))
+    p.add_argument("--fail-on", choices=("none", "any", "cross-user"),
+                   help=t("h.dup.fail_on"), default=None)
+    p.set_defaults(func=cmd_dup)
+
+    p = sub.add_parser("similar", help=t("h.lh.similar"),
+                       description=t("h.similar.summary"),
+                       formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("files", nargs="*", help=t("h.similar.files"))
+    p.add_argument("--lang", help=t("h.lang"))
+    p.add_argument("--json", action="store_true", help=t("h.json"))
+    p.add_argument("--k", type=int, default=7, help=t("h.dup.k"))
+    p.add_argument("--window", type=int, default=4, help=t("h.dup.window"))
+    p.add_argument("--no-winnow", action="store_true", help=t("h.dup.no_winnow"))
+    p.add_argument("--min-score", type=float, default=0.5, help=t("h.dup.min_score"))
+    p.add_argument("--min-containment", type=float, default=0.8, help=t("h.dup.min_containment"))
+    p.add_argument("--min-shared", type=int, default=3, help=t("h.dup.min_shared"))
+    p.add_argument("--min-tokens", type=int, default=80, help=t("h.dup.min_tokens"))
+    p.add_argument("--evidence", type=int, default=3, help=t("h.dup.evidence"))
+    p.set_defaults(func=cmd_similar)
+
+    p = sub.add_parser("audit", help=t("h.lh.audit"),
+                       description=t("h.audit.summary"),
+                       formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("files", nargs="*", help=t("h.dup.files"))
+    p.add_argument("--manifest", help=t("h.dup.manifest"))
+    p.add_argument("--store", help=t("h.audit.store"))
+    p.add_argument("--signals", help=t("h.audit.signals"))
+    p.add_argument("--json", action="store_true", help=t("h.json"))
+    p.add_argument("--min-score", type=float, default=0.5, help=t("h.dup.min_score"))
+    p.add_argument("--min-containment", type=float, default=0.8, help=t("h.dup.min_containment"))
+    p.add_argument("--min-shared", type=int, default=3, help=t("h.dup.min_shared"))
+    p.add_argument("--min-tokens", type=int, default=80, help=t("h.dup.min_tokens"))
+    p.add_argument("--min-evidence", type=int, default=3, help=t("h.min_evidence"))
+    p.add_argument("--k", type=int, default=7, help=t("h.dup.k"))
+    p.add_argument("--window", type=int, default=4, help=t("h.dup.window"))
+    p.add_argument("--no-winnow", action="store_true", help=t("h.dup.no_winnow"))
+    p.add_argument("--keep-common", action="store_true", help=t("h.dup.keep_common"))
+    p.add_argument("--all-problems", action="store_true", help=t("h.dup.all_problems"))
+    p.add_argument("--cross-language", action="store_true", help=t("h.dup.cross_language"))
+    p.add_argument("--evidence", type=int, default=3, help=t("h.dup.evidence"))
+    p.add_argument("--fail-on", choices=("none", "duplicate", "any"), default="duplicate",
+                   help=t("h.audit.fail_on"))
+    p.set_defaults(func=cmd_audit)
+
     p = sub.add_parser("rules", help=t("h.lh.rules"))
     p.set_defaults(func=cmd_rules)
     p = sub.add_parser("languages", help=t("h.lh.languages"))
@@ -483,6 +628,9 @@ def main(argv: list[str] | None = None) -> int:
         return args.func(args)
     except (InputError, StoreError) as exc:
         print(f"cf: {exc}", file=sys.stderr)
+        return EXIT_ERROR
+    except SimilarityError as exc:
+        print(f"cf: {t('e.similarity', error=exc)}", file=sys.stderr)
         return EXIT_ERROR
     except KeyboardInterrupt:
         print(t("e.interrupted"), file=sys.stderr)

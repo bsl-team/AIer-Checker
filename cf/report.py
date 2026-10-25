@@ -256,3 +256,130 @@ def render_languages(specs) -> str:
                   (notes.get(name, ""), 0, "left")])
         )
     return "\n".join(lines)
+
+
+def _range(span: tuple[int, int]) -> str:
+    return str(span[0]) if span[0] == span[1] else f"{span[0]}-{span[1]}"
+
+
+def render_similarity(sim, evidence_limit: int = 3) -> str:
+    """One pair, for ``cf similar``."""
+    lines = [t("r.sim_head", a=sim.a, b=sim.b)]
+    lines.append(
+        t("r.sim_scores", jaccard=f"{sim.jaccard:.3f}", containment=f"{sim.containment:.3f}",
+          shared=sim.shared_ngrams, tokens_a=sim.tokens_a, tokens_b=sim.tokens_b)
+    )
+    if sim.user_a != "unknown" or sim.user_b != "unknown":
+        lines.append(
+            t("r.sim_users", user_a=sim.user_a, user_b=sim.user_b,
+              scope=t("r.sim_cross_user") if sim.cross_user else t("r.sim_same_user"))
+        )
+    if sim.problem:
+        lines.append(t("r.sim_problem", problem=sim.problem))
+    lines.append(t("r.sim_verdict", state=t("r.sim_flagged") if sim.qualifies else t("r.sim_not_flagged")))
+    if sim.evidence:
+        lines.append("")
+        lines.append(t("r.sim_evidence_head"))
+        for span in sim.evidence[:evidence_limit]:
+            lines.append(
+                t("r.sim_evidence_row", rows_a=_range(span.a_lines), rows_b=_range(span.b_lines),
+                  tokens=span.tokens)
+            )
+    if sim.warnings:
+        lines.append(t("r.sim_warnings", items=", ".join(sim.warnings)))
+    lines.append("")
+    lines.append(t("r.sim_note"))
+    return "\n".join(lines)
+
+
+def render_duplicates(report, top: int = 50, show_all: bool = False, note: bool = True) -> str:
+    lines: list[str] = []
+    shown = report.pairs if show_all else report.pairs[:max(0, top)]
+    lines.append(t("r.dup_head", count=len(report.pairs), submissions=len(report.submissions)))
+    lines.append("")
+    if not report.pairs:
+        lines.append(t("r.dup_none"))
+    else:
+        header = line([(t("r.dup.col.score"), 18, "left"), (t("r.dup.col.a"), 26, "left"),
+                       (t("r.dup.col.b"), 26, "left"), (t("r.dup.col.user"), 15, "left"),
+                       (t("r.dup.col.problem"), 10, "left"), (t("r.dup.col.evidence"), 0, "right")])
+        lines.append(header)
+        lines.append("-" * display_width(header))
+        for p in shown:
+            users = f"{p.user_a}|{p.user_b}" if p.cross_user else f"{p.user_a}(same)"
+            lines.append(
+                line([(f"J={p.jaccard:.3f} C={p.containment:.3f}", 18, "left"),
+                      (_clip(p.a, 26), 26, "left"), (_clip(p.b, 26), 26, "left"),
+                      (_clip(users, 15), 15, "left"), (_clip(p.problem or "-", 10), 10, "left"),
+                      (str(len(p.evidence)), 0, "right")])
+            )
+        if len(shown) < len(report.pairs):
+            lines.append(t("r.dup_more", count=len(report.pairs) - len(shown)))
+    if report.clusters:
+        lines.append("")
+        lines.append(t("r.dup_clusters", count=len(report.clusters)))
+        for c in report.clusters:
+            lines.append(
+                t("r.dup_cluster_row", cid=c.id, users=", ".join(c.users), size=c.size,
+                  jaccard=f"{c.max_jaccard:.3f}")
+            )
+    warnings = list(report.warnings)
+    if warnings:
+        lines.append("")
+        lines.append(t("r.dup_warnings"))
+        for warning in warnings:
+            lines.append(f"  - {warning}")
+    if note:
+        lines.append("")
+        lines.append(t("r.sim_note"))
+    return "\n".join(lines)
+
+
+def _clip(text: str, width: int) -> str:
+    text = str(text)
+    return text if display_width(text) <= width else "..." + text[-(width - 3):]
+
+
+def render_audit(report) -> str:
+    lines: list[str] = []
+    lines.append(t("r.audit_head", duplicates=len(report.duplicates.pairs) if report.duplicates else 0,
+                   submissions=len(report.duplicates.submissions) if report.duplicates else 0))
+    lines.append("")
+    lines.append(render_duplicates(report.duplicates, top=20, note=False))
+    lines.append("")
+    lines.append(t("r.audit_style_head", count=len(report.style_deviations)))
+    if not report.style_deviations:
+        lines.append(t("r.audit_none"))
+    else:
+        header = line([(t("r.audit.col.id"), 24, "left"), (t("r.audit.col.user"), 12, "left"),
+                       (t("r.audit.col.findings"), 9, "right"), (t("r.audit.col.severity"), 8, "left"),
+                       (t("r.audit.col.rules"), 0, "left")])
+        lines.append(header)
+        lines.append("-" * display_width(header))
+        for item in report.style_deviations:
+            lines.append(
+                line([(_clip(item.id, 24), 24, "left"), (_clip(item.user, 12), 12, "left"),
+                      (item.findings, 9, "right"), (translate_value(item.max_severity or "-", kind="severity"), 8, "left"),
+                      (", ".join(item.rules[:4]) + (" ..." if len(item.rules) > 4 else ""), 0, "left")])
+            )
+    lines.append("")
+    lines.append(t("r.audit_signals_head", count=len(report.external_signals)))
+    for signal in report.external_signals:
+        keys = ", ".join(f"{k}={signal[k]}" for k in sorted(signal) if k != "id")
+        lines.append(f"  {signal.get('id', '-')}  {keys}")
+    if not report.external_signals:
+        lines.append(t("r.audit_none"))
+    lines.append("")
+    lines.append(t("r.audit_flags_head", count=len(report.flags)))
+    for flag in report.flags:
+        lines.append(f"  {flag.id}  {' + '.join(flag.reasons)}")
+    if not report.flags:
+        lines.append(t("r.audit_none"))
+    if report.warnings:
+        lines.append("")
+        lines.append(t("r.dup_warnings"))
+        for warning in report.warnings:
+            lines.append(f"  - {warning}")
+    lines.append("")
+    lines.append(t("r.audit_note"))
+    return "\n".join(lines)
